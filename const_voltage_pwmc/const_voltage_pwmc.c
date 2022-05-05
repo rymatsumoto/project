@@ -13,7 +13,7 @@
 
 #define INV_FREQ 85000
 #define DEAD_TIME 300
-#define REF_RECT 520
+#define REF_RECT 1108
 #define REF_PWMC 260
 #define REF_ZC_CNT 60
 
