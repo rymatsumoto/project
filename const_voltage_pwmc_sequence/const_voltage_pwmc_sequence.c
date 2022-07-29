@@ -20,7 +20,7 @@
 #define SMA_LEN 20
 
 volatile int REF_RECT = 1108;
-volatile int REF_ZC_CNT = 70;
+volatile int REF_ZC_CNT = 80;
 
 volatile int set_pwm_on_trans = -1;
 volatile int set_pwm_on_rect = -1;
