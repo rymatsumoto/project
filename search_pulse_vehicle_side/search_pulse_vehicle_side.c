@@ -16,9 +16,9 @@
 
 #include <mwio4.h>
 
-#define BDN0 1 //送電側PEVボード
-#define BDN1 2 //受電側PEVボード
-#define BDN2 0 //FPGAボード
+#define BDN0 1 //路面側PEVボード
+#define BDN1 2 //車両側PEVボード
+#define BDN2 1 //FPGAボード
                             //WN WP VN VP UN UP
 #define TRANS_MODE 80       //00 00 01 01 00 00
 #define RECT_MODE  255      //00 00 11 11 11 11
@@ -41,7 +41,9 @@
 #define DETECT 2
 #define PAUSE 3
 #define TRANSMIT 4
-#define STOP 5
+#define SHORT 5
+#define RECT 6
+#define STOP 7
 
 int max_velocity_rpm = 847;
 float travel_length_m = 2.2;
@@ -58,15 +60,15 @@ float time_bwd_decel_start_us;
 float time_bwd_end_us;
 int pause_time_us = 0;
 int transmit_time_us = 0;
-volatile int pause_time_thld_us = 5e4; // 5 kmph
-// volatile int pause_time_thld_us = 1e6; // depth_cam_detection
-volatile int transmit_time_thld_us = 1e5; // 5kmph
-// volatile int transmit_time_thld_us = 1e6; // depth_cam_detection
+// volatile int pause_time_thld_us = 5e4; // 5 kmph
+volatile int pause_time_thld_us = 5e5; // depth_cam_detection
+// volatile int transmit_time_thld_us = 1e5; // 5kmph
+volatile int transmit_time_thld_us = 1e6; // depth_cam_detection
 
 float max_velocity_m_us;
 int r_bench_mode = 0;
 int r_servo_on = 0;
-volatile w_servo_on = 0;
+volatile int w_servo_on = 0;
 int encoder_count = 0;
 int encoder_previous = 0;
 int encoder_diff = 0;
@@ -78,14 +80,16 @@ float i2_ampl;
 volatile float i1_weight = 1.1;
 volatile float i2_weight = 1.1;
 
-volatile int inverter_mode = 0;
-volatile int inverter_start_count = 90000; // 5 kmph
-// volatile int inverter_start_count = 60e3; // depth_cam_detection
+volatile int inverter_mode_tx = 0;
+volatile int inverter_mode_rx = 0;
+// volatile int inverter_start_count = 90000; // 5 kmph
+volatile int inverter_start_count = 60e3; // depth_cam_detection
 
-volatile float inv_mod_BDN0_pulse = 0.9;
 volatile float inv_mod_BDN0_trans = 0;
+volatile float inv_mod_BDN1_pulse = 0.9;
 
-volatile float i1_ampl_thld_detect = 2;
+volatile float i1_ampl_thld_detect = 3;
+volatile float i2_ampl_thld_detect = 5;
 volatile float i1_ampl_thld_transmit = 10;
 
 //----------------------------------------------------------------------------------------
@@ -107,11 +111,11 @@ void time_count(void)
 	{
 		time_init_us += TIMER_2_INTERVAL;
 	}
-	if (inverter_mode == PAUSE)
+	if (inverter_mode_tx == PAUSE)
 	{
 		pause_time_us += TIMER_2_INTERVAL;
 	}
-	else if (inverter_mode == TRANSMIT)
+	else if (inverter_mode_tx == TRANSMIT)
 	{
 		transmit_time_us += TIMER_2_INTERVAL;
 	}
@@ -125,63 +129,82 @@ interrupt void encoding_time_count(void)
 }
 
 //----------------------------------------------------------------------------------------
-//　パルス印加または給電を開始
+//　車両側インバータ　パルス開始または整流モード遷移
 //----------------------------------------------------------------------------------------
 
-interrupt void turn_on_inverter(void)
+interrupt void rx_inverter_turn_on(void)
 {
 	C6657_timer1_clear_eventflag();
 
-	if (inverter_mode == STANDBY)
+	if (inverter_mode_rx == STANDBY)
 	{
-		PEV_inverter_set_uvw(BDN0, -inv_mod_BDN0_pulse, inv_mod_BDN0_pulse, 0, 0);
-		PEV_inverter_control_gate(BDN1, SHORT_MODE);
+		PEV_inverter_set_uvw(BDN1, -inv_mod_BDN1_pulse, inv_mod_BDN1_pulse, 0, 0);
+		PEV_inverter_control_gate(BDN0, SHORT_MODE);
 		PEV_inverter_start_pwm(BDN0);
 		PEV_inverter_start_pwm(BDN1);
-		inverter_mode = DETECT;
+		inverter_mode_tx = SHORT;
+		inverter_mode_rx = DETECT;
 	}
-	else if (inverter_mode == DETECT)
+	else if (inverter_mode_rx == DETECT)
 	{
-		PEV_inverter_stop_pwm(BDN0);
-		inverter_mode = PAUSE;
-	}
-	else if (inverter_mode == PAUSE)
-	{
-		if (pause_time_us > pause_time_thld_us)
-		{
-			PEV_inverter_set_uvw(BDN0, -inv_mod_BDN0_trans, inv_mod_BDN0_trans, 0, 0);
-			PEV_inverter_control_gate(BDN1, RECT_MODE);
-			PEV_inverter_start_pwm(BDN0);
-			PEV_inverter_start_pwm(BDN1);
-			inverter_mode = TRANSMIT;
-		}
+		PEV_inverter_stop_pwm(BDN1);
+		PEV_inverter_control_gate(BDN1, RECT_MODE);
+		PEV_inverter_start_pwm(BDN1);
+		inverter_mode_rx = RECT;
 	}
 }
 
 //----------------------------------------------------------------------------------------
-//　パルス印加または給電を終了
+//　路面側インバータ　給電開始または停止　＆　車両側インバータ　パルス停止
 //----------------------------------------------------------------------------------------
 
-interrupt void turn_off_inverter(void)
+void tx_inverter_turn_on_off(void)
 {
-	C6657_timer0_clear_eventflag();
-
-	if (inverter_mode == DETECT)
+	if (inverter_mode_tx == SHORT)
 	{
 		if (i1_ampl > i1_ampl_thld_detect)
 		{
-			PEV_inverter_stop_pwm(BDN0);
-			inverter_mode = STANDBY;
+			inverter_mode_tx = PAUSE;
 		}
 	}
-	else if (inverter_mode == TRANSMIT)
+	else if (inverter_mode_tx == PAUSE)
+	{
+		if (pause_time_us > pause_time_thld_us)
+		{
+			PEV_inverter_stop_pwm(BDN0);
+			PEV_inverter_control_gate(BDN0, TRANS_MODE);
+			PEV_inverter_set_uvw(BDN0, -inv_mod_BDN0_trans, inv_mod_BDN0_trans, 0, 0);
+			PEV_inverter_start_pwm(BDN0);
+			inverter_mode_tx = TRANSMIT;
+		}
+	}
+	else if (inverter_mode_tx == TRANSMIT)
 	{
 		if (i1_ampl > i1_ampl_thld_transmit && transmit_time_us > transmit_time_thld_us)
 		{
 			PEV_inverter_stop_pwm(BDN0);
-			inverter_mode = STOP;
+			inverter_mode_tx = STOP;
 		}
 	}
+}
+
+void rx_inverter_turn_off(void)
+{
+	if (inverter_mode_rx == DETECT)
+	{
+		if (i2_ampl > i2_ampl_thld_detect)
+		{
+			PEV_inverter_stop_pwm(BDN1);
+			inverter_mode_rx = STANDBY;
+		}
+	}
+}
+
+interrupt void tx_inverter_turn_on_off_rx_inverter_turn_off(void)
+{
+	C6657_timer0_clear_eventflag();
+	tx_inverter_turn_on_off();
+	rx_inverter_turn_off();
 }
 
 //----------------------------------------------------------------------------------------
@@ -218,15 +241,16 @@ void initialize(void)
 
 	PEV_init(BDN1);
 	PEV_inverter_init(BDN1, INV_FREQ, DEAD_TIME);
-	PEV_inverter_control_gate(BDN1, RECT_MODE);
+	PEV_inverter_control_gate(BDN1, TRANS_MODE);
+	PEV_inverter_set_uvw(BDN1, 0, 0, 0, 0);
 
 	C6657_timer0_init(TIMER_0_INTERVAL);
-	C6657_timer0_init_vector(turn_off_inverter, (CSL_IntcVectId)7);
+	C6657_timer0_init_vector(tx_inverter_turn_on_off_rx_inverter_turn_off, (CSL_IntcVectId)7);
 	C6657_timer0_start();
 	C6657_timer0_enable_int();
 
 	C6657_timer1_init(TIMER_1_INTERVAL);
-	C6657_timer1_init_vector(turn_on_inverter, (CSL_IntcVectId)6);
+	C6657_timer1_init_vector(rx_inverter_turn_on, (CSL_IntcVectId)6);
 	C6657_timer1_start();
 	C6657_timer1_enable_int();
 
@@ -242,7 +266,6 @@ void initialize(void)
 
 	PEV_pio_out(BDN0, OFF);
 	PEV_pio_set_bit(BDN0, CN1_40);
-
 }
 
 //----------------------------------------------------------------------------------------
@@ -253,19 +276,19 @@ int MW_main(void)
 {
 	initialize();
 
-	max_velocity_m_us = (float)max_velocity_rpm * Motor_Radius * Reduction_Ratio * 2 * 3.14 * 1e-6 / 60.0;
+	// max_velocity_m_us = (float)max_velocity_rpm * Motor_Radius * Reduction_Ratio * 2 * 3.14 * 1e-6 / 60.0;
 
-	time_fwd_decel_start_us = time_fwd_start_us + travel_length_m / max_velocity_m_us;
-	time_fwd_end_us = time_fwd_start_us + (2 * travel_length_m - const_velocity_length_m) / max_velocity_m_us;
-	time_bwd_start_us = time_fwd_end_us + time_wait_us;
-	time_bwd_decel_start_us = time_bwd_start_us + travel_length_m / max_velocity_m_us;
-	time_bwd_end_us = time_bwd_start_us + (2 * travel_length_m - const_velocity_length_m) / max_velocity_m_us;
-
-	// time_fwd_decel_start_us = time_fwd_start_us + 22e6;
-	// time_fwd_end_us = time_fwd_decel_start_us + 1e6;
+	// time_fwd_decel_start_us = time_fwd_start_us + travel_length_m / max_velocity_m_us;
+	// time_fwd_end_us = time_fwd_start_us + (2 * travel_length_m - const_velocity_length_m) / max_velocity_m_us;
 	// time_bwd_start_us = time_fwd_end_us + time_wait_us;
-	// time_bwd_decel_start_us = time_bwd_start_us + 22e6;
-	// time_bwd_end_us = time_bwd_decel_start_us + 1e6;
+	// time_bwd_decel_start_us = time_bwd_start_us + travel_length_m / max_velocity_m_us;
+	// time_bwd_end_us = time_bwd_start_us + (2 * travel_length_m - const_velocity_length_m) / max_velocity_m_us;
+
+	time_fwd_decel_start_us = time_fwd_start_us + 22e6;
+	time_fwd_end_us = time_fwd_decel_start_us + 1e6;
+	time_bwd_start_us = time_fwd_end_us + time_wait_us;
+	time_bwd_decel_start_us = time_bwd_start_us + 22e6;
+	time_bwd_end_us = time_bwd_decel_start_us + 1e6;
 
 	while (1)
 	{
@@ -321,9 +344,9 @@ int MW_main(void)
 			}
 		}
 
-		if (encoder_count > inverter_start_count && inverter_mode == SLEEP)
+		if (encoder_count > inverter_start_count && inverter_mode_rx == SLEEP)
 		{
-			inverter_mode = STANDBY;
+			inverter_mode_rx = STANDBY;
 		}
 	}
 }
