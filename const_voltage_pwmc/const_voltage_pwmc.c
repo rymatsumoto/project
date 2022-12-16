@@ -14,13 +14,15 @@
 #define INV_FREQ 85000
 #define DEAD_TIME 300
 #define REF_PWMC 260
-#define SMA_LEN 50
+#define SMA_LEN 100         // 移動平均の要素数
 #define TIMER0_INTERVAL 5
-#define TIMER1_INTERVAL 2000
+#define TIMER1_INTERVAL 5000
 #define TIMER2_INTERVAL 1000
 
 volatile int REF_RECT = 1108;
 volatile int REF_ZC_CNT = 68;
+volatile int LPF_CUTTOFF = 2000;   // LPFカットオフ周波数 [Hz]
+volatile float P_O_STEP_SIZE = 0.005;
 
 volatile int set_pwm_on_trans = -1;
 volatile int set_pwm_on_rect = -1;
@@ -44,16 +46,25 @@ volatile float integralGain = 0.03;
 float proportional = 0;
 float integral = 0;
 
-float i2dc;
 float range[] = {5., 5., 5., 5., 5., 5., 5., 5.};
 float data[] = {0., 0., 0., 0.};
 
-float i2dc_lst[SMA_LEN];
-float i2dc_lst_tmp[SMA_LEN];
+float i2dc_list[SMA_LEN];
+float i2dc_list_tmp[SMA_LEN];
 float i2dc_avg = 0;
 float i2dc_sum = 0;
 float i2dc_avg_last = 0;
 
+float i2dc_crnt = 0;
+float i2dc_prvs = 0;
+float i2dc_lpf_crnt = 0;
+float i2dc_lpf_prvs = 0;
+float lpf_T;
+float lpf_A;
+float lpf_B;
+
+float i2dc_p_o_crnt = 0;
+float i2dc_p_o_prvs = 0;
 volatile int up_down = 1;
 
 volatile int count_start = -1;
@@ -103,23 +114,36 @@ void pwmc_tx_control(void)
 
 void read_i2dc(void)
 {
+	// // 移動平均
+	// PEV_ad_in_4ch(BDN2, 0, data);
+	// i2dc_crnt = data[0] * 25;							// 2V 50A
+
+	// int i;
+
+	// for (i = 0; i < SMA_LEN - 1; ++i) {             // 移動平均リストの各要素を一つずつ左へシフト 
+	// 	i2dc_list_tmp[i] = i2dc_list[i+1];
+	// }
+	// i2dc_list_tmp[SMA_LEN-1] = i2dc_crnt;	                // 移動平均リストの末尾に最新の測定値を追加
+	// for (i = 0; i < SMA_LEN; ++i) {
+	// 	i2dc_list[i] = i2dc_list_tmp[i];
+	// }
+	// i2dc_sum = 0;
+	// for (i = 0; i < SMA_LEN; ++i) {                 // 移動平均リストの和
+	// 	i2dc_sum += i2dc_list[i];
+	// }
+	// i2dc_avg = i2dc_sum / SMA_LEN; 		            // 要素数で除算
+
+	// ローパスフィルタ
+	lpf_T = 1 / (2 * 3.14 * LPF_CUTTOFF);
+	lpf_A = TIMER0_INTERVAL * 1e-6 / (TIMER0_INTERVAL * 1e-6 + 2 * lpf_T);
+	lpf_B = (TIMER0_INTERVAL * 1e-6-2 * lpf_T) / (TIMER0_INTERVAL * 1e-6 + 2 * lpf_T);
+
 	PEV_ad_in_4ch(BDN2, 0, data);
-	i2dc = data[0] * 25;							// 2V 50A
+	i2dc_crnt = data[0] * 25;							// 2V 50A
+	i2dc_lpf_crnt = lpf_A * i2dc_crnt + lpf_A * i2dc_prvs - lpf_B * i2dc_lpf_prvs;
 
-	int i;
-
-	for (i = 0; i < SMA_LEN - 1; ++i) {             // 移動平均リストの各要素を一つずつ左へシフト 
-		i2dc_lst_tmp[i] = i2dc_lst[i+1];
-	}
-	i2dc_lst_tmp[SMA_LEN-1] = i2dc;	                // 移動平均リストの末尾に最新の測定値を追加
-	for (i = 0; i < SMA_LEN; ++i) {
-		i2dc_lst[i] = i2dc_lst_tmp[i];
-	}
-	i2dc_sum = 0;
-	for (i = 0; i < SMA_LEN; ++i) {                 // 移動平均リストの和
-		i2dc_sum += i2dc_lst[i];
-	}
-	i2dc_avg = i2dc_sum / SMA_LEN; 		            // 要素数で除算
+	i2dc_prvs = i2dc_crnt;
+	i2dc_lpf_prvs = i2dc_lpf_crnt;
 }
 
 //----------------------------------------------------------------------------------------
@@ -143,24 +167,27 @@ interrupt void pwmc_rx_control(void)
 	C6657_timer1_clear_eventflag();
 
 	if (pwmc_rx_control_on == 1) {
-		if (i2dc_avg < i2dc_avg_last && up_down == 1)
+		// i2dc_p_o_crnt = i2dc_avg;
+		i2dc_p_o_crnt = i2dc_lpf_crnt;
+
+		if (i2dc_p_o_crnt < i2dc_p_o_prvs && up_down == 1)
 		{
-			pwm_out_BDN1 = pwm_out_BDN1 + 0.005;
+			pwm_out_BDN1 = pwm_out_BDN1 + P_O_STEP_SIZE;
 			up_down = 1;
 		}
-		else if (i2dc_avg < i2dc_avg_last && up_down == -1)
+		else if (i2dc_p_o_crnt < i2dc_p_o_prvs && up_down == -1)
 		{
-			pwm_out_BDN1 = pwm_out_BDN1 - 0.005;
+			pwm_out_BDN1 = pwm_out_BDN1 - P_O_STEP_SIZE;
 			up_down = -1;
 		}
-		else if (i2dc_avg >= i2dc_avg_last && up_down == 1)
+		else if (i2dc_p_o_crnt >= i2dc_p_o_prvs && up_down == 1)
 		{
-			pwm_out_BDN1 = pwm_out_BDN1 - 0.005;
+			pwm_out_BDN1 = pwm_out_BDN1 - P_O_STEP_SIZE;
 			up_down = -1;
 		}
-		else if (i2dc_avg >= i2dc_avg_last && up_down == -1)
+		else if (i2dc_p_o_crnt >= i2dc_p_o_prvs && up_down == -1)
 		{
-			pwm_out_BDN1 = pwm_out_BDN1 + 0.005;
+			pwm_out_BDN1 = pwm_out_BDN1 + P_O_STEP_SIZE;
 			up_down = 1;
 		}
 
@@ -174,7 +201,7 @@ interrupt void pwmc_rx_control(void)
 		wref_BDN1 = pwm_out_BDN1 * carrier_cnt_max;
 		IPFPGA_write(BDN1, 0x04, wref_BDN1);
 
-		i2dc_avg_last = i2dc_avg;
+		i2dc_p_o_prvs = i2dc_p_o_crnt;
 	}
 
 	else {
@@ -229,7 +256,7 @@ void initialize(void)
 	int i;
 
 	for (i = 0; i < SMA_LEN; ++i) {
-		i2dc_lst[i] = 0;
+		i2dc_list[i] = 0;
 	}
 
 	carrier_cnt_max = 50000000. / INV_FREQ;
