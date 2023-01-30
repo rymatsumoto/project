@@ -7,7 +7,7 @@
 
 #include    <mwio4.h>
 
-#define BDN0 0				//送電側FPGAボード
+#define BDN0 1				//送電側FPGAボード
 #define BDN1 1				//受電側FPGAボード
 #define BDN2 0				//PEVボード
 
@@ -16,7 +16,7 @@
 #define REF_PWMC 260
 #define SMA_LEN 100         // 移動平均の要素数
 #define TIMER0_INTERVAL 5
-#define TIMER1_INTERVAL 5000
+#define TIMER1_INTERVAL 1000
 #define TIMER2_INTERVAL 1000
 
 volatile int REF_RECT = 1108;

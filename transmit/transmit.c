@@ -15,7 +15,7 @@
 			                //WN WP VN VP UN UP
 #define TRANS_MODE 80 		//00 00 01 01 00 00
 #define INV_FREQ 85000
-#define DEAD_TIME 300
+#define DEAD_TIME 600
 
 volatile int set_pwm_on = -1;
 volatile float duty = 1;
