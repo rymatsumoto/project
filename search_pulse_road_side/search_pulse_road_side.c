@@ -73,8 +73,9 @@ int encoder_diff = 0;
 
 INT32 adc_0_data_peak;
 INT32 adc_1_data_peak;
-float i1_ampl;
-float i2_ampl;
+float i1_ampl = 0;
+float i2_ampl = 0;
+volatile float i1_ampl_max = 50;
 volatile float i1_weight = 1.1;
 volatile float i2_weight = 1.1;
 
@@ -82,11 +83,16 @@ volatile int inverter_mode = 0;
 volatile int inverter_start_count = 90000; // 5 kmph
 // volatile int inverter_start_count = 60e3; // depth_cam_detection
 
-volatile float inv_mod_BDN0_pulse = 0.9;
-volatile float inv_mod_BDN0_trans = 0;
+volatile float duty_pulse = 0.1;
+volatile float duty_trans = 1;
+volatile float duty_step = 0.01;
+volatile float duty_ramp = 0;
 
 volatile float i1_ampl_thld_detect = 2;
 volatile float i1_ampl_thld_transmit = 10;
+
+volatile int enable_soft_start = 0;
+volatile int overcurrent_protection = 0;
 
 //----------------------------------------------------------------------------------------
 //　エンコーダ読み出し & 時間計測
@@ -125,6 +131,33 @@ interrupt void encoding_time_count(void)
 }
 
 //----------------------------------------------------------------------------------------
+//　ソフトスタート
+//----------------------------------------------------------------------------------------
+
+void soft_start(void)
+{
+	if (inverter_mode == TRANSMIT)
+	{
+		if (enable_soft_start == 0)
+		{
+			PEV_inverter_set_uvw(BDN0, duty_trans-1, 1-duty_trans, 0, 0);
+		}
+		else if (enable_soft_start == 1)
+		{
+			if (duty_ramp < duty_trans)
+			{
+				duty_ramp += duty_step;
+				PEV_inverter_set_uvw(BDN0, duty_ramp-1, 1-duty_ramp, 0, 0);
+			}
+			else
+			{
+				PEV_inverter_set_uvw(BDN0, duty_trans-1, 1-duty_trans, 0, 0);
+			}
+		}
+	}
+}
+
+//----------------------------------------------------------------------------------------
 //　パルス印加または給電を開始
 //----------------------------------------------------------------------------------------
 
@@ -134,7 +167,7 @@ interrupt void turn_on_inverter(void)
 
 	if (inverter_mode == STANDBY)
 	{
-		PEV_inverter_set_uvw(BDN0, -inv_mod_BDN0_pulse, inv_mod_BDN0_pulse, 0, 0);
+		PEV_inverter_set_uvw(BDN0, duty_pulse-1, 1-duty_pulse, 0, 0);
 		PEV_inverter_control_gate(BDN1, SHORT_MODE);
 		PEV_inverter_start_pwm(BDN0);
 		PEV_inverter_start_pwm(BDN1);
@@ -149,7 +182,7 @@ interrupt void turn_on_inverter(void)
 	{
 		if (pause_time_us > pause_time_thld_us)
 		{
-			PEV_inverter_set_uvw(BDN0, -inv_mod_BDN0_trans, inv_mod_BDN0_trans, 0, 0);
+			PEV_inverter_set_uvw(BDN0, -1, 1, 0, 0);
 			PEV_inverter_control_gate(BDN1, RECT_MODE);
 			PEV_inverter_start_pwm(BDN0);
 			PEV_inverter_start_pwm(BDN1);
@@ -188,13 +221,34 @@ interrupt void turn_off_inverter(void)
 //　電流包絡線検波
 //----------------------------------------------------------------------------------------
 
-interrupt void read_envelope(void)
+void read_envelope(void)
 {
-	int0_ack();
     adc_0_data_peak = IPFPGA_read(BDN2, 0x17);
 	adc_1_data_peak = IPFPGA_read(BDN2, 0x18);
 	i1_ampl = adc_0_data_peak * 125. / 8000 * i1_weight;
 	i2_ampl = adc_1_data_peak * 125. / 8000 * i2_weight;
+
+	if (inverter_mode == TRANSMIT)
+	{
+		if (overcurrent_protection == 1)
+		{
+			if (i1_ampl > i1_ampl_max)
+			{
+				PEV_inverter_stop_pwm(BDN0);
+			}
+		}
+	}
+}
+
+//----------------------------------------------------------------------------------------
+//　キャリア同期割込み
+//----------------------------------------------------------------------------------------
+
+interrupt void sync_interrupt(void)
+{
+	int0_ack();
+	read_envelope();
+	soft_start();
 }
 
 //----------------------------------------------------------------------------------------
@@ -210,7 +264,7 @@ void initialize(void)
     PEV_inverter_init(BDN0, INV_FREQ, DEAD_TIME);
     PEV_inverter_init_int_timing(BDN0, 1, 0, 0);
     PEV_int_init(BDN0, 2, 0, 0, 0, 0, 0, 0, 0);
-    int0_init_vector(read_envelope, (CSL_IntcVectId)8, FALSE);
+    int0_init_vector(sync_interrupt, (CSL_IntcVectId)8, FALSE);
     PEV_inverter_control_gate(BDN0, TRANS_MODE);
     PEV_inverter_set_uvw(BDN0, 0, 0, 0, 0);
     PEV_inverter_enable_int(BDN0);
