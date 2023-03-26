@@ -14,9 +14,7 @@
                             //WN WP VN VP UN UP
 #define TRANS_MODE 80       //00 00 01 01 00 00
 #define INV_FREQ 85000
-#define DEAD_TIME 300
-#define INV_FREQ 85000
-#define DEAD_TIME 300
+#define DEAD_TIME 600
 #define REF_PWMC 260
 #define SMA_LEN 50
 #define TIMER0_INTERVAL 5
@@ -29,6 +27,8 @@ volatile float P_O_STEP_SIZE = 0.005;
 INT32 adc_0_data_peak;
 float itx_ampl;
 volatile float itx_weight = 1.1;
+volatile float irx1_weight = 1;
+volatile float irx2_weight = 1;
 volatile float itx_ampl_ref;
 float vtx_ampl_ref = 0;
 volatile int set_pwm_on_trans_w_o_control = 0;
@@ -160,8 +160,8 @@ interrupt void read_irx1dc_irx2dc(void)
     lpf_B = (TIMER0_INTERVAL * 1e-6 - 2 * lpf_T) / (TIMER0_INTERVAL * 1e-6 + 2 * lpf_T);
 
     PEV_ad_in_4ch(BDN2, 0, data);
-    irx1dc_crnt = data[0] * 25;                           // 2V 50A
-    irx2dc_crnt = data[1] * 25;                           // 2V 50A
+    irx1dc_crnt = data[0] * 25 * irx1_weight;                           // 2V 50A
+    irx2dc_crnt = data[1] * 25 * irx2_weight;                           // 2V 50A
     irx1dc_lpf_crnt = lpf_A * irx1dc_crnt + lpf_A * irx1dc_prvs - lpf_B * irx1dc_lpf_prvs;
     irx2dc_lpf_crnt = lpf_A * irx2dc_crnt + lpf_A * irx2dc_prvs - lpf_B * irx2dc_lpf_prvs;
 
