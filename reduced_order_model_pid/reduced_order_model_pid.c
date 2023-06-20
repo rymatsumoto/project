@@ -7,7 +7,7 @@
 
 #include    <mwio4.h>
 
-#define BDN0 0              //PEVボード
+#define BDN0 1              //PEVボード
 #define BDN1 1              //FPGAボード
                             //WN WP VN VP UN UP
 #define TRANS_MODE 80       //00 00 01 01 00 00
@@ -27,9 +27,12 @@ int control_on = 0;
 volatile float proportionalGain;
 volatile float integralGain;
 volatile float derivativeGain;
+volatile float tau;
 float error_crnt = 0;
 float error_prvs = 0;
 float error_integral = 0;
+float error_derivative_crnt = 0;
+float error_derivative_prvs = 0;
 float period = 1 / (float)INV_FREQ / 2;
 volatile float v1dc;
 volatile float inv_mod_BDN0 = 0;
@@ -73,8 +76,10 @@ void current_control(void)
     {
         error_crnt = i1_ampl_ref - i1_ampl;
         error_integral = error_integral + (error_crnt + error_prvs) / 2 * period;
-        v1_ampl_ref = proportionalGain * error_crnt + integralGain * error_integral;
+        error_derivative_crnt = 2/(period+2*tau)*error_crnt - 2/(period+2*tau)*error_prvs - (period-2*tau)/(period+2*tau)*error_derivative_prvs;
+        v1_ampl_ref = proportionalGain * error_crnt + integralGain * error_integral + derivativeGain * error_derivative_crnt;
         error_prvs = error_crnt;
+        error_derivative_prvs = error_derivative_crnt;
 
         if (v1_ampl_ref < 0)
         {
