@@ -1,6 +1,6 @@
 //----------------------------------------------------------------------------------------
 //title
-//　簡易包絡線モデルに基づいた電流包絡線PID制御
+//　簡易包絡線モデルに基づいた電流包絡線FF制御
 //designer
 //　ryo matsumoto
 //----------------------------------------------------------------------------------------
@@ -16,27 +16,46 @@
 
 INT32 adc_0_data_peak;
 float i1_ampl;
-//volatile float i1_weight = 1.18;
 volatile float i1_weight_pos = 1.18;
 volatile float i1_weight_neg = 1;
-volatile float i1_ampl_ref;
+
 float v1_ampl_ref = 0;
+float v1_ampl_ref_prvs = 0;
+float v1_ampl_ref_prvs_prvs = 0;
+volatile float i1_ampl_ref = 1.5;
+float i1_ampl_ref_prvs = 0;
+float i1_ampl_ref_prvs_prvs = 0;
+
 volatile int set_pwm_on_trans_w_o_control = 0;
 volatile int set_pwm_on_trans_w_control = 0;
 int control_on = 0;
-volatile float proportionalGain;
-volatile float integralGain;
-volatile float derivativeGain;
-volatile float tau;
-float error_crnt = 0;
-float error_prvs = 0;
-float error_integral = 0;
-float error_derivative_crnt = 0;
-float error_derivative_prvs = 0;
+
+const float pi = 3.14;
 float period = 1 / (float)INV_FREQ / 2;
 volatile float v1dc;
 volatile float inv_mod_BDN0 = 1;
-const float pi = 3.14;
+
+float T;
+float f;
+float w;
+float L1;
+float L2;
+float M;
+float RL;
+
+float alpha1;
+float alpha0;
+float beta1;
+float beta0;
+
+float lpf_T;
+
+float p0;
+float p1;
+float p2;
+float q0;
+float q1;
+float q2;
 
 //----------------------------------------------------------------------------------------
 //　arccos関数
@@ -74,13 +93,14 @@ void current_control(void)
 {
     if (control_on == 1)
     {
-        error_crnt = i1_ampl_ref - i1_ampl;
-        error_integral = error_integral + (error_crnt + error_prvs) / 2 * period;
-        error_derivative_crnt = 2/(period+2*tau)*error_crnt - 2/(period+2*tau)*error_prvs - (period-2*tau)/(period+2*tau)*error_derivative_prvs;
-        v1_ampl_ref = proportionalGain * error_crnt + integralGain * error_integral + derivativeGain * error_derivative_crnt;
-        error_prvs = error_crnt;
-        error_derivative_prvs = error_derivative_crnt;
+        v1_ampl_ref = q2/p0*i1_ampl_ref_prvs_prvs + q1/p0*i1_ampl_ref_prvs + q0/p0*i1_ampl_ref - p2/p0*v1_ampl_ref_prvs_prvs - p1/p0*v1_ampl_ref_prvs;
 
+        v1_ampl_ref_prvs_prvs = v1_ampl_ref_prvs;
+        v1_ampl_ref_prvs = v1_ampl_ref;
+        
+        i1_ampl_ref_prvs_prvs = i1_ampl_ref_prvs;
+        i1_ampl_ref_prvs = i1_ampl_ref;
+        
         if (v1_ampl_ref < 0)
         {
             v1_ampl_ref = 0;
@@ -126,6 +146,28 @@ interrupt void sync_interrupt(void)
 
 void initialize(void)
 {
+    T = 11.76e-6;
+    f = 1 / T;
+    w = f * 2 * pi;
+    L1 = 246e-6;
+    L2 = 106e-6;
+    M = 19.5e-6;
+    RL = 5.7;
+
+    alpha1 = RL / (2*L2);
+    alpha0 = (w*M)*(w*M) / (4*L1*L2);
+    beta1 = 1 / (2*L1);
+    beta0 = RL / (4*L1*L2);
+
+    lpf_T = 50e-6;
+
+    p0 = 4*lpf_T*beta1 + 2*period*(beta1+lpf_T*beta0) + period*period*beta0;
+    p1 = -8*lpf_T*beta1 + 2*period*period*beta0;
+    p2 = 4*lpf_T*beta1 - 2*period*(beta1+lpf_T*beta0) + period*period*beta0;
+    q0 = 4 + 2*period*alpha1 + period*period*alpha0;
+    q1 = -8 + 2*period*period*alpha0;
+    q2 = 4 - 2*period*alpha1 + period*period*alpha0;
+
     PEV_init(BDN0);
 
     int_disable();
