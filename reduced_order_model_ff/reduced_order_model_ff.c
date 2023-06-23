@@ -33,7 +33,7 @@ int control_on = 0;
 const float pi = 3.14;
 float period = 1 / (float)INV_FREQ / 2;
 volatile float v1dc;
-volatile float inv_mod_BDN0 = 1;
+float inv_mod_BDN0 = 1;
 
 float T;
 float f;
@@ -154,12 +154,12 @@ void initialize(void)
     M = 19.5e-6;
     RL = 5.7;
 
+    lpf_T = 100e-6;
+
     alpha1 = RL / (2*L2);
     alpha0 = (w*M)*(w*M) / (4*L1*L2);
     beta1 = 1 / (2*L1);
     beta0 = RL / (4*L1*L2);
-
-    lpf_T = 50e-6;
 
     p0 = 4*lpf_T*beta1 + 2*period*(beta1+lpf_T*beta0) + period*period*beta0;
     p1 = -8*lpf_T*beta1 + 2*period*period*beta0;
