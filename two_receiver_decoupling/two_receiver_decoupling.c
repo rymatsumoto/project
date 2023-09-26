@@ -18,7 +18,8 @@
 #define TRANS_MODE 80 		//00 00 01 01 00 00
 #define INV_FREQ 100000
 #define DEAD_TIME 500
-#define REF_PWMC 216
+#define REF_PWMC_RX1 216
+#define REF_PWMC_RX2 216
 #define TIMER0_INTERVAL 100
 
 volatile int set_inverter_on_w_control = 0;
@@ -50,6 +51,12 @@ volatile int wref_rx2 = 0;
 volatile int carrier_cnt_max;
 volatile int carrier_cnt_hlf;
 
+float range[] = {5., 5., 5., 5., 5., 5., 5., 5.};
+float data[] = {0., 0., 0., 0.};
+float dc_current_rx1;
+float dc_current_rx2;
+const float Gth = 0.1042;
+
 //----------------------------------------------------------------------------------------
 //　arccos関数
 //----------------------------------------------------------------------------------------
@@ -61,21 +68,35 @@ float arccos(float x)
 }
 
 //----------------------------------------------------------------------------------------
-//　電流包絡線検波
+//　可変キャパシタ制御
 //----------------------------------------------------------------------------------------
 
-void read_envelope(void)
+interrupt void pwmc_control(void)
 {
-    adc_0_data_peak = IPFPGA_read(BDN_FPGA1, 0x17);
-	itx_ampl = adc_0_data_peak * 125. / 8000 * itx_weight;
+	C6657_timer0_clear_eventflag();
+
+	PEV_ad_in_4ch(BDN_PEV, 0, data);
+	dc_current_rx1 = (2.5 - data[0]) / Gth / 3;
+	dc_current_rx2 = (2.5 - data[1]) / Gth / 3;
+
+	wref_rx1 = pwm_out_rx1 * carrier_cnt_max;
+	wref_rx2 = pwm_out_rx2 * carrier_cnt_max;
+
+	IPFPGA_write(BDN_FPGA1, 0x04, wref_rx1);
+	IPFPGA_write(BDN_FPGA2, 0x04, wref_rx2);
 }
 
 //----------------------------------------------------------------------------------------
 //　電流制御
 //----------------------------------------------------------------------------------------
 
-void current_control(void)
+interrupt void current_control(void)
 {
+	int0_ack();
+
+    adc_0_data_peak = IPFPGA_read(BDN_FPGA1, 0x17);
+	itx_ampl = adc_0_data_peak * 125. / 8000 * itx_weight;
+
     if (control_on == 1)
     {
         error_crnt = itx_ampl_ref - itx_ampl;
@@ -112,37 +133,14 @@ void current_control(void)
 }
 
 //----------------------------------------------------------------------------------------
-//　可変キャパシタ制御
-//----------------------------------------------------------------------------------------
-
-interrupt void pwmc_control(void)
-{
-	C6657_timer0_clear_eventflag();
-
-	wref_rx1 = pwm_out_rx1 * carrier_cnt_max;
-	wref_rx2 = pwm_out_rx2 * carrier_cnt_max;
-
-	IPFPGA_write(BDN_FPGA1, 0x04, wref_rx1);
-	IPFPGA_write(BDN_FPGA2, 0x04, wref_rx2);
-}
-
-//----------------------------------------------------------------------------------------
-//　キャリア同期割込み関数
-//----------------------------------------------------------------------------------------
-
-interrupt void sync_interrupt(void)
-{
-	int0_ack();
-	read_envelope();
-	current_control();
-}
-
-//----------------------------------------------------------------------------------------
 //　初期化
 //----------------------------------------------------------------------------------------
 
 void initialize(void)
 {
+	PEV_ad_set_range(BDN_PEV, range);
+	PEV_ad_set_mode(BDN_PEV, 0);
+
 	carrier_cnt_max = 50000000. / INV_FREQ;
 	carrier_cnt_hlf = 25000000. / INV_FREQ;
 	
@@ -151,14 +149,14 @@ void initialize(void)
 	IPFPGA_write(BDN_FPGA1, 0x03, carrier_cnt_hlf);
 	IPFPGA_write(BDN_FPGA1, 0x04, wref_rx1);
 	IPFPGA_write(BDN_FPGA1, 0x05, DEAD_TIME / 10);
-	IPFPGA_write(BDN_FPGA1, 0x09, REF_PWMC);
+	IPFPGA_write(BDN_FPGA1, 0x09, REF_PWMC_RX1);
 
 	IPFPGA_write(BDN_FPGA2, 0x01, carrier_cnt_max);
 	IPFPGA_write(BDN_FPGA2, 0x02, carrier_cnt_hlf);
 	IPFPGA_write(BDN_FPGA2, 0x03, carrier_cnt_hlf);
 	IPFPGA_write(BDN_FPGA2, 0x04, wref_rx2);
 	IPFPGA_write(BDN_FPGA2, 0x05, DEAD_TIME / 10);
-	IPFPGA_write(BDN_FPGA2, 0x09, REF_PWMC);
+	IPFPGA_write(BDN_FPGA2, 0x09, REF_PWMC_RX2);
 
 	int_disable();
 
@@ -167,7 +165,7 @@ void initialize(void)
     PEV_inverter_init(BDN_PEV, INV_FREQ, DEAD_TIME);
     PEV_inverter_init_int_timing(BDN_PEV, 1, 3, 0);
     PEV_int_init(BDN_PEV, 2, 0, 0, 0, 0, 0, 0, 0);
-    int0_init_vector(sync_interrupt, (CSL_IntcVectId)8, FALSE);
+    int0_init_vector(current_control, (CSL_IntcVectId)8, FALSE);
     PEV_inverter_control_gate(BDN_PEV, TRANS_MODE);
     PEV_inverter_set_uvw(BDN_PEV, 0, 0, 0, 0);
 
