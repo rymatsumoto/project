@@ -20,16 +20,21 @@
 #define DEAD_TIME 500
 #define TIMER0_INTERVAL 5
 #define TIMER1_INTERVAL 100
+#define TIMER2_INTERVAL 1000
+#define RL1 10
+#define RL2 10
 
 volatile int REF_PWMC_RX1 = 160;
 volatile int REF_PWMC_RX2 = 160;
 volatile int LPF_CUTTOFF = 1000;
+volatile float P_O_STEP_SIZE = 0.005;
 
-volatile int set_inverter_on_w_control = 0;
-volatile int set_inverter_on_w_o_control = 0;
-volatile int set_pwmc_rx1_on = 0;
-volatile int set_pwmc_rx2_on = 0;
-volatile int control_on = 0;
+volatile int start_current_control = 0;
+volatile int start_pwmc_rx1_init = 0;
+volatile int start_pwmc_rx2_init = 0;
+volatile int start_pwmc_control = 0;
+int current_control_on = 0;
+int pwmc_control_on = 0;
 
 INT32 adc_0_data_peak;
 float itx_ampl = 0;
@@ -47,6 +52,7 @@ volatile float vdc;
 volatile float proportionalGain;
 volatile float integralGain;
 
+int state = 0;
 volatile float pwm_out_rx1 = 0;
 volatile float pwm_out_rx2 = 0;
 volatile int wref_rx1 = 0;
@@ -68,6 +74,31 @@ float lpf_T;
 float lpf_A;
 float lpf_B;
 const float Gth = 0.1042;
+
+volatile int count_start = 0;
+int counter = 0;
+
+float power_rx1 = 0;
+float power_rx2 = 0;
+float max_power = 0;
+float power_state_1 = 0;
+float power_state_2 = 0;
+float power_state_3 = 0;
+float power_state_4 = 0;
+
+//----------------------------------------------------------------------------------------
+//　max関数
+//----------------------------------------------------------------------------------------
+
+float max(float a, float b)
+{
+    if (a >= b) {
+        return a;
+    }
+    else if (a < b) {
+        return b;
+    }
+}
 
 //----------------------------------------------------------------------------------------
 //　arccos関数
@@ -112,15 +143,74 @@ interrupt void pwmc_control(void)
 {
 	C6657_timer1_clear_eventflag();
 
-	PEV_ad_in_4ch(BDN_PEV, 0, data);
-	dc_current_rx1 = (2.5 - data[0]) / Gth / 3;
-	dc_current_rx2 = (2.5 - data[1]) / Gth / 3;
+	if (pwmc_control_on == 1) {
+		if (state == 0) {
+			pwm_out_rx1 = pwm_out_rx1 + P_O_STEP_SIZE;
+			pwm_out_rx2 = pwm_out_rx2 + P_O_STEP_SIZE;
+			state = 1;
+		}
+		else if (state == 1) {
+			power_rx1 = RL1 * dc_current_rx1_lpf * dc_current_rx1_lpf;
+			power_rx2 = RL2 * dc_current_rx2_lpf * dc_current_rx2_lpf;
+			power_state_1 = power_rx1 + power_rx2;
+			pwm_out_rx2 = pwm_out_rx2 - P_O_STEP_SIZE * 2;
+			state = 2;
+		}
+		else if (state == 2) {
+			power_rx1 = RL1 * dc_current_rx1_lpf * dc_current_rx1_lpf;
+			power_rx2 = RL2 * dc_current_rx2_lpf * dc_current_rx2_lpf;
+			power_state_2 = power_rx1 + power_rx2;
+			pwm_out_rx1 = pwm_out_rx1 - P_O_STEP_SIZE * 2;
+			state = 3;
+		}
+		else if (state == 3) {
+			power_rx1 = RL1 * dc_current_rx1_lpf * dc_current_rx1_lpf;
+			power_rx2 = RL2 * dc_current_rx2_lpf * dc_current_rx2_lpf;
+			power_state_3 = power_rx1 + power_rx2;
+			pwm_out_rx2 = pwm_out_rx2 + P_O_STEP_SIZE * 2;
+			state = 4;
+		}
+		else if (state == 4) {
+			power_rx1 = RL1 * dc_current_rx1_lpf * dc_current_rx1_lpf;
+			power_rx2 = RL2 * dc_current_rx2_lpf * dc_current_rx2_lpf;
+			power_state_4 = power_rx1 + power_rx2;
+			pwm_out_rx1 = pwm_out_rx1 + P_O_STEP_SIZE;
+			pwm_out_rx2 = pwm_out_rx2 - P_O_STEP_SIZE;
 
-	wref_rx1 = pwm_out_rx1 * carrier_cnt_max;
-	wref_rx2 = pwm_out_rx2 * carrier_cnt_max;
+			max_power = max(max(power_state_1, power_state_2), max(power_state_3, power_state_4));
 
-	IPFPGA_write(BDN_FPGA1, 0x04, wref_rx1);
-	IPFPGA_write(BDN_FPGA2, 0x04, wref_rx2);
+			if (max_power == power_state_1) {
+				pwm_out_rx1 = pwm_out_rx1 + P_O_STEP_SIZE;
+				pwm_out_rx2 = pwm_out_rx2 + P_O_STEP_SIZE;
+			}
+			else if (max_power == power_state_2) {
+				pwm_out_rx1 = pwm_out_rx1 + P_O_STEP_SIZE;
+				pwm_out_rx2 = pwm_out_rx2 - P_O_STEP_SIZE;
+			}
+			else if (max_power == power_state_3) {
+				pwm_out_rx1 = pwm_out_rx1 - P_O_STEP_SIZE;
+				pwm_out_rx2 = pwm_out_rx2 - P_O_STEP_SIZE;
+			}
+			else if (max_power == power_state_4) {
+				pwm_out_rx1 = pwm_out_rx1 - P_O_STEP_SIZE;
+				pwm_out_rx2 = pwm_out_rx2 + P_O_STEP_SIZE;
+			}
+			state = 0;
+		}
+		wref_rx1 = pwm_out_rx1 * carrier_cnt_max;
+		wref_rx2 = pwm_out_rx2 * carrier_cnt_max;
+
+		IPFPGA_write(BDN_FPGA1, 0x04, wref_rx1);
+		IPFPGA_write(BDN_FPGA2, 0x04, wref_rx2);
+	}
+
+	else {
+		wref_rx1 = pwm_out_rx1 * carrier_cnt_max;
+		wref_rx2 = pwm_out_rx2 * carrier_cnt_max;
+
+		IPFPGA_write(BDN_FPGA1, 0x04, wref_rx1);
+		IPFPGA_write(BDN_FPGA2, 0x04, wref_rx2);
+	}
 }
 
 //----------------------------------------------------------------------------------------
@@ -134,7 +224,7 @@ interrupt void current_control(void)
     adc_0_data_peak = IPFPGA_read(BDN_FPGA1, 0x17);
 	itx_ampl = adc_0_data_peak * 125. / 8000 * itx_weight;
 
-    if (control_on == 1)
+    if (current_control_on == 1)
     {
         error_crnt = itx_ampl_ref - itx_ampl;
         error_integral = error_integral + (error_crnt + error_prvs) / 2 * period;
@@ -163,10 +253,19 @@ interrupt void current_control(void)
 
         PEV_inverter_set_uvw(BDN_PEV, -inv_mod, inv_mod, 0, 0);
     }
-    else
-    {
-        PEV_inverter_set_uvw(BDN_PEV, -inv_mod, inv_mod, 0, 0);
-    }
+}
+
+//----------------------------------------------------------------------------------------
+// カウンター
+//----------------------------------------------------------------------------------------
+
+interrupt void increment_counter(void)
+{
+	C6657_timer2_clear_eventflag();
+
+	if (count_start == 1){
+		counter = counter + 1;
+	}
 }
 
 //----------------------------------------------------------------------------------------
@@ -214,10 +313,15 @@ void initialize(void)
 	C6657_timer1_init_vector(pwmc_control, (CSL_IntcVectId)6);
 	C6657_timer1_start();
 
+	C6657_timer2_init(TIMER2_INTERVAL);
+	C6657_timer2_init_vector(increment_counter, (CSL_IntcVectId)7);
+	C6657_timer2_start();
+
     PEV_inverter_enable_int(BDN_PEV);
     int0_enable_int();
     C6657_timer0_enable_int();
 	C6657_timer1_enable_int();
+	C6657_timer2_enable_int();
 	int_enable();
 }
 
@@ -231,19 +335,18 @@ void MW_main(void)
 
 	while(1)
 	{
-		if (set_inverter_on_w_control == 1) {
+		if (counter == start_current_control) {
 			PEV_inverter_start_pwm(BDN_PEV);
-			control_on = 1;
+			current_control_on = 1;
 		}
-		if (set_inverter_on_w_o_control == 1) {
-			PEV_inverter_start_pwm(BDN_PEV);
-			control_on = 0;
-		}
-		if (set_pwmc_rx1_on == 1) {
+		if (counter == start_pwmc_rx1_init) {
 			IPFPGA_write(BDN_FPGA1, 0x07, 1);
 		}
-		if (set_pwmc_rx2_on == 1) {
+		if (counter == start_pwmc_rx2_init) {
 			IPFPGA_write(BDN_FPGA2, 0x07, 1);
+		}
+		if (counter == start_pwmc_control) {
+			pwmc_control_on = 1;
 		}
 	}
 }
