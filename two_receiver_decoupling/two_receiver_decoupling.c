@@ -19,7 +19,7 @@
 #define INV_FREQ 100000
 #define DEAD_TIME 500
 #define TIMER0_INTERVAL 5
-#define TIMER1_INTERVAL 50000
+#define TIMER1_INTERVAL 10000
 #define TIMER2_INTERVAL 1000
 #define RL1 10
 #define RL2 10
@@ -75,8 +75,8 @@ float lpf_A;
 float lpf_B;
 const float Gth = 0.1042;
 
-volatile int count_start = 0;
-int counter = -1;
+// volatile int count_start = 0;
+// int counter = -1;
 
 float power_rx1 = 0;
 float power_rx2 = 0;
@@ -259,14 +259,14 @@ interrupt void current_control(void)
 // カウンター
 //----------------------------------------------------------------------------------------
 
-interrupt void increment_counter(void)
-{
-	C6657_timer2_clear_eventflag();
+// interrupt void increment_counter(void)
+// {
+// 	C6657_timer2_clear_eventflag();
 
-	if (count_start == 1){
-		counter = counter + 1;
-	}
-}
+// 	if (count_start == 1){
+// 		counter = counter + 1;
+// 	}
+// }
 
 //----------------------------------------------------------------------------------------
 //　初期化
@@ -313,15 +313,15 @@ void initialize(void)
 	C6657_timer1_init_vector(pwmc_control, (CSL_IntcVectId)6);
 	C6657_timer1_start();
 
-	C6657_timer2_init(TIMER2_INTERVAL);
-	C6657_timer2_init_vector(increment_counter, (CSL_IntcVectId)7);
-	C6657_timer2_start();
+	// C6657_timer2_init(TIMER2_INTERVAL);
+	// C6657_timer2_init_vector(increment_counter, (CSL_IntcVectId)7);
+	// C6657_timer2_start();
 
     PEV_inverter_enable_int(BDN_PEV);
     int0_enable_int();
     C6657_timer0_enable_int();
 	C6657_timer1_enable_int();
-	C6657_timer2_enable_int();
+	// C6657_timer2_enable_int();
 	int_enable();
 }
 
