@@ -18,9 +18,12 @@
 #define TRANS_MODE 80 		//00 00 01 01 00 00
 #define INV_FREQ 100000
 #define DEAD_TIME 500
-#define REF_PWMC_RX1 216
-#define REF_PWMC_RX2 216
-#define TIMER0_INTERVAL 100
+#define TIMER0_INTERVAL 5
+#define TIMER1_INTERVAL 100
+
+volatile int REF_PWMC_RX1 = 160;
+volatile int REF_PWMC_RX2 = 160;
+volatile int LPF_CUTTOFF = 1000;
 
 volatile int set_inverter_on_w_control = 0;
 volatile int set_inverter_on_w_o_control = 0;
@@ -55,6 +58,15 @@ float range[] = {5., 5., 5., 5., 5., 5., 5., 5.};
 float data[] = {0., 0., 0., 0.};
 float dc_current_rx1;
 float dc_current_rx2;
+float dc_current_rx1_prvs = 0;
+float dc_current_rx2_prvs = 0;
+float dc_current_rx1_lpf;
+float dc_current_rx2_lpf;
+float dc_current_rx1_lpf_prvs = 0;
+float dc_current_rx2_lpf_prvs = 0;
+float lpf_T;
+float lpf_A;
+float lpf_B;
 const float Gth = 0.1042;
 
 //----------------------------------------------------------------------------------------
@@ -68,12 +80,37 @@ float arccos(float x)
 }
 
 //----------------------------------------------------------------------------------------
+//　出力電流読み出し
+//----------------------------------------------------------------------------------------
+
+interrupt void read_dc_current(void)
+{
+	C6657_timer0_clear_eventflag();
+
+	PEV_ad_in_4ch(BDN_PEV, 0, data);
+	dc_current_rx1 = (2.5 - data[0]) / Gth / 3;
+	dc_current_rx2 = (2.5 - data[1]) / Gth / 3;
+
+	lpf_T = 1 / (2 * 3.14 * LPF_CUTTOFF);
+	lpf_A = TIMER0_INTERVAL * 1e-6 / (TIMER0_INTERVAL * 1e-6 + 2 * lpf_T);
+	lpf_B = (TIMER0_INTERVAL * 1e-6 - 2 * lpf_T) / (TIMER0_INTERVAL * 1e-6 + 2 * lpf_T);
+
+	dc_current_rx1_lpf = lpf_A * dc_current_rx1 + lpf_A * dc_current_rx1_prvs - lpf_B * dc_current_rx1_lpf_prvs;
+	dc_current_rx2_lpf = lpf_A * dc_current_rx2 + lpf_A * dc_current_rx2_prvs - lpf_B * dc_current_rx2_lpf_prvs;
+
+	dc_current_rx1_prvs = dc_current_rx1;
+	dc_current_rx2_prvs = dc_current_rx2;
+	dc_current_rx1_lpf_prvs = dc_current_rx1_lpf;
+	dc_current_rx2_lpf_prvs = dc_current_rx2_lpf;
+}
+
+//----------------------------------------------------------------------------------------
 //　可変キャパシタ制御
 //----------------------------------------------------------------------------------------
 
 interrupt void pwmc_control(void)
 {
-	C6657_timer0_clear_eventflag();
+	C6657_timer1_clear_eventflag();
 
 	PEV_ad_in_4ch(BDN_PEV, 0, data);
 	dc_current_rx1 = (2.5 - data[0]) / Gth / 3;
@@ -170,12 +207,17 @@ void initialize(void)
     PEV_inverter_set_uvw(BDN_PEV, 0, 0, 0, 0);
 
 	C6657_timer0_init(TIMER0_INTERVAL);
-	C6657_timer0_init_vector(pwmc_control, (CSL_IntcVectId)5);
+	C6657_timer0_init_vector(read_dc_current, (CSL_IntcVectId)5);
 	C6657_timer0_start();
+
+	C6657_timer1_init(TIMER1_INTERVAL);
+	C6657_timer1_init_vector(pwmc_control, (CSL_IntcVectId)6);
+	C6657_timer1_start();
 
     PEV_inverter_enable_int(BDN_PEV);
     int0_enable_int();
     C6657_timer0_enable_int();
+	C6657_timer1_enable_int();
 	int_enable();
 }
 
