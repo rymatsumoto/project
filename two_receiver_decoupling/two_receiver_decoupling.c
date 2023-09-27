@@ -19,7 +19,7 @@
 #define INV_FREQ 100000
 #define DEAD_TIME 500
 #define TIMER0_INTERVAL 5
-#define TIMER1_INTERVAL 100
+#define TIMER1_INTERVAL 50000
 #define TIMER2_INTERVAL 1000
 #define RL1 10
 #define RL2 10
@@ -76,7 +76,7 @@ float lpf_B;
 const float Gth = 0.1042;
 
 volatile int count_start = 0;
-int counter = 0;
+int counter = -1;
 
 float power_rx1 = 0;
 float power_rx2 = 0;
@@ -335,18 +335,22 @@ void MW_main(void)
 
 	while(1)
 	{
-		if (counter == start_current_control) {
+		if (start_current_control == 1) {
 			PEV_inverter_start_pwm(BDN_PEV);
 			current_control_on = 1;
+			start_current_control = -1;
 		}
-		if (counter == start_pwmc_rx1_init) {
+		if (start_pwmc_rx1_init == 1) {
 			IPFPGA_write(BDN_FPGA1, 0x07, 1);
+			start_pwmc_rx1_init = -1;
 		}
-		if (counter == start_pwmc_rx2_init) {
+		if (start_pwmc_rx2_init == 1) {
 			IPFPGA_write(BDN_FPGA2, 0x07, 1);
+			start_pwmc_rx2_init = -1;
 		}
-		if (counter == start_pwmc_control) {
+		if (start_pwmc_control == 1) {
 			pwmc_control_on = 1;
+			start_pwmc_control = -1;
 		}
 	}
 }
