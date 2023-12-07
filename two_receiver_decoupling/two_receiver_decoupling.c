@@ -19,13 +19,13 @@
 #define INV_FREQ 100000
 #define DEAD_TIME 500
 #define TIMER0_INTERVAL 5
-#define TIMER1_INTERVAL 10000
+#define TIMER1_INTERVAL 500
 #define TIMER2_INTERVAL 1000
 #define RL1 10
 #define RL2 10
 
-volatile int REF_PWMC_RX1 = 160;
-volatile int REF_PWMC_RX2 = 160;
+volatile int REF_PWMC_RX1 = 145;
+volatile int REF_PWMC_RX2 = 145;
 volatile int LPF_CUTTOFF = 1000;
 volatile float P_O_STEP_SIZE = 0.005;
 
@@ -59,6 +59,9 @@ volatile int wref_rx1 = 0;
 volatile int wref_rx2 = 0;
 volatile int carrier_cnt_max;
 volatile int carrier_cnt_hlf;
+int up_down = 1;
+int up_down_rx1 = 1;
+int up_down_rx2 = 1;
 
 float range[] = {5., 5., 5., 5., 5., 5., 5., 5.};
 float data[] = {0., 0., 0., 0.};
@@ -75,11 +78,10 @@ float lpf_A;
 float lpf_B;
 const float Gth = 0.1042;
 
-// volatile int count_start = 0;
-// int counter = -1;
-
 float power_rx1 = 0;
 float power_rx2 = 0;
+float power_total = 0;
+float power_total_last = 0;
 float max_power = 0;
 float power_state_1 = 0;
 float power_state_2 = 0;
@@ -144,64 +146,84 @@ interrupt void pwmc_control(void)
 	C6657_timer1_clear_eventflag();
 
 	if (pwmc_control_on == 1) {
-		if (state == 0) {
-			pwm_out_rx1 = pwm_out_rx1 + P_O_STEP_SIZE;
-			pwm_out_rx2 = pwm_out_rx2 + P_O_STEP_SIZE;
-			state = 1;
-		}
-		else if (state == 1) {
-			power_rx1 = RL1 * dc_current_rx1_lpf * dc_current_rx1_lpf;
-			power_rx2 = RL2 * dc_current_rx2_lpf * dc_current_rx2_lpf;
-			power_state_1 = power_rx1 + power_rx2;
-			pwm_out_rx2 = pwm_out_rx2 - P_O_STEP_SIZE * 2;
-			state = 2;
-		}
-		else if (state == 2) {
-			power_rx1 = RL1 * dc_current_rx1_lpf * dc_current_rx1_lpf;
-			power_rx2 = RL2 * dc_current_rx2_lpf * dc_current_rx2_lpf;
-			power_state_2 = power_rx1 + power_rx2;
-			pwm_out_rx1 = pwm_out_rx1 - P_O_STEP_SIZE * 2;
-			state = 3;
-		}
-		else if (state == 3) {
-			power_rx1 = RL1 * dc_current_rx1_lpf * dc_current_rx1_lpf;
-			power_rx2 = RL2 * dc_current_rx2_lpf * dc_current_rx2_lpf;
-			power_state_3 = power_rx1 + power_rx2;
-			pwm_out_rx2 = pwm_out_rx2 + P_O_STEP_SIZE * 2;
-			state = 4;
-		}
-		else if (state == 4) {
-			power_rx1 = RL1 * dc_current_rx1_lpf * dc_current_rx1_lpf;
-			power_rx2 = RL2 * dc_current_rx2_lpf * dc_current_rx2_lpf;
-			power_state_4 = power_rx1 + power_rx2;
-			pwm_out_rx1 = pwm_out_rx1 + P_O_STEP_SIZE;
-			pwm_out_rx2 = pwm_out_rx2 - P_O_STEP_SIZE;
 
-			max_power = max(max(power_state_1, power_state_2), max(power_state_3, power_state_4));
+		power_rx1 = RL1 * dc_current_rx1_lpf * dc_current_rx1_lpf;
+		power_rx2 = RL2 * dc_current_rx2_lpf * dc_current_rx2_lpf;
 
-			if (max_power == power_state_1) {
+		power_total = power_rx1 + power_rx2;
+
+		if (power_total >= power_total_last)
+		{
+			if (up_down_rx1 == 1)
+			{
 				pwm_out_rx1 = pwm_out_rx1 + P_O_STEP_SIZE;
-				pwm_out_rx2 = pwm_out_rx2 + P_O_STEP_SIZE;
+				up_down_rx1 = 1;
 			}
-			else if (max_power == power_state_2) {
-				pwm_out_rx1 = pwm_out_rx1 + P_O_STEP_SIZE;
-				pwm_out_rx2 = pwm_out_rx2 - P_O_STEP_SIZE;
-			}
-			else if (max_power == power_state_3) {
+			else if (up_down_rx1 == -1)
+			{
 				pwm_out_rx1 = pwm_out_rx1 - P_O_STEP_SIZE;
-				pwm_out_rx2 = pwm_out_rx2 - P_O_STEP_SIZE;
+				up_down_rx1 = -1;
 			}
-			else if (max_power == power_state_4) {
-				pwm_out_rx1 = pwm_out_rx1 - P_O_STEP_SIZE;
+			if (up_down_rx2 == 1)
+			{
 				pwm_out_rx2 = pwm_out_rx2 + P_O_STEP_SIZE;
+				up_down_rx2 = 1;
 			}
-			state = 0;
+			else if (up_down_rx2 == -1)
+			{
+				pwm_out_rx2 = pwm_out_rx2 - P_O_STEP_SIZE;
+				up_down_rx2 = -1;
+			}
 		}
+		else if (power_total < power_total_last)
+		{
+			if (up_down_rx1 == 1)
+			{
+				pwm_out_rx1 = pwm_out_rx1 - P_O_STEP_SIZE;
+				up_down_rx1 = -1;
+			}
+			else if (up_down_rx1 == -1)
+			{
+				pwm_out_rx1 = pwm_out_rx1 + P_O_STEP_SIZE;
+				up_down_rx1 = 1;
+			}
+			if (up_down_rx2 == 1)
+			{
+				pwm_out_rx2 = pwm_out_rx2 - P_O_STEP_SIZE;
+				up_down_rx2 = -1;
+			}
+			else if (up_down_rx2 == -1)
+			{
+				pwm_out_rx2 = pwm_out_rx2 + P_O_STEP_SIZE;
+				up_down_rx2 = 1;
+			}
+		}
+
+		if (pwm_out_rx1 > 1)
+		{
+			pwm_out_rx1 = 1;
+		}
+		else if (pwm_out_rx1 < 0)
+		{
+			pwm_out_rx1 = 0;
+		}
+
+		if (pwm_out_rx2 > 1)
+		{
+			pwm_out_rx2 = 1;
+		}
+		else if (pwm_out_rx2 < 0)
+		{
+			pwm_out_rx2 = 0;
+		}
+
 		wref_rx1 = pwm_out_rx1 * carrier_cnt_max;
 		wref_rx2 = pwm_out_rx2 * carrier_cnt_max;
 
 		IPFPGA_write(BDN_FPGA1, 0x04, wref_rx1);
 		IPFPGA_write(BDN_FPGA2, 0x04, wref_rx2);
+
+		power_total_last = power_total;
 	}
 
 	else {
@@ -256,17 +278,17 @@ interrupt void current_control(void)
 }
 
 //----------------------------------------------------------------------------------------
-// カウンター
+//　ゲート信号の位相調整
 //----------------------------------------------------------------------------------------
 
-// interrupt void increment_counter(void)
-// {
-// 	C6657_timer2_clear_eventflag();
+interrupt void adjust_ref_pwmc(void)
+{
+	C6657_timer2_clear_eventflag();
 
-// 	if (count_start == 1){
-// 		counter = counter + 1;
-// 	}
-// }
+	IPFPGA_write(BDN_FPGA1, 0x09, REF_PWMC_RX1);
+	IPFPGA_write(BDN_FPGA2, 0x09, REF_PWMC_RX2);
+	
+}
 
 //----------------------------------------------------------------------------------------
 //　初期化
@@ -313,9 +335,9 @@ void initialize(void)
 	C6657_timer1_init_vector(pwmc_control, (CSL_IntcVectId)6);
 	C6657_timer1_start();
 
-	// C6657_timer2_init(TIMER2_INTERVAL);
-	// C6657_timer2_init_vector(increment_counter, (CSL_IntcVectId)7);
-	// C6657_timer2_start();
+	C6657_timer2_init(TIMER2_INTERVAL);
+	C6657_timer2_init_vector(adjust_ref_pwmc, (CSL_IntcVectId)7);
+	C6657_timer2_start();
 
     PEV_inverter_enable_int(BDN_PEV);
     int0_enable_int();
