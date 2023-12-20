@@ -24,6 +24,11 @@
 #define RL1 10
 #define RL2 10
 
+#define UP 1
+#define DOWN -1
+#define UPDATE_RX1 1
+#define UPDATE_RX2 2
+
 volatile int REF_PWMC_RX1 = 145;
 volatile int REF_PWMC_RX2 = 145;
 volatile int LPF_CUTTOFF = 1000;
@@ -83,10 +88,7 @@ float power_rx2 = 0;
 float power_total = 0;
 float power_total_last = 0;
 float max_power = 0;
-float power_state_1 = 0;
-float power_state_2 = 0;
-float power_state_3 = 0;
-float power_state_4 = 0;
+int update_mode = 1;
 
 //----------------------------------------------------------------------------------------
 //　max関数
@@ -152,68 +154,73 @@ interrupt void pwmc_control(void)
 
 		power_total = power_rx1 + power_rx2;
 
-		if (power_total >= power_total_last)
-		{
-			if (up_down_rx1 == 1)
-			{
+		if (update_mode == UPDATE_RX1) {
+			if (power_total >= power_total_last) {
+				if (up_down_rx2 == UP) {
+					up_down_rx2 = UP;
+				}
+				else if (up_down_rx2 == DOWN) {
+					up_down_rx2 = DOWN;
+				}
+			}
+			else if (power_total < power_total_last) {
+				if (up_down_rx2 == UP) {
+					up_down_rx2 = DOWN;
+				}
+				else if (up_down_rx2 == DOWN) {
+					up_down_rx2 = UP;
+				}
+			}
+
+			if (up_down_rx1 == UP) {
 				pwm_out_rx1 = pwm_out_rx1 + P_O_STEP_SIZE;
-				up_down_rx1 = 1;
 			}
-			else if (up_down_rx1 == -1)
-			{
+			else if (up_down_rx1 == DOWN) {
 				pwm_out_rx1 = pwm_out_rx1 - P_O_STEP_SIZE;
-				up_down_rx1 = -1;
 			}
-			if (up_down_rx2 == 1)
-			{
-				pwm_out_rx2 = pwm_out_rx2 + P_O_STEP_SIZE;
-				up_down_rx2 = 1;
-			}
-			else if (up_down_rx2 == -1)
-			{
-				pwm_out_rx2 = pwm_out_rx2 - P_O_STEP_SIZE;
-				up_down_rx2 = -1;
-			}
-		}
-		else if (power_total < power_total_last)
-		{
-			if (up_down_rx1 == 1)
-			{
-				pwm_out_rx1 = pwm_out_rx1 - P_O_STEP_SIZE;
-				up_down_rx1 = -1;
-			}
-			else if (up_down_rx1 == -1)
-			{
-				pwm_out_rx1 = pwm_out_rx1 + P_O_STEP_SIZE;
-				up_down_rx1 = 1;
-			}
-			if (up_down_rx2 == 1)
-			{
-				pwm_out_rx2 = pwm_out_rx2 - P_O_STEP_SIZE;
-				up_down_rx2 = -1;
-			}
-			else if (up_down_rx2 == -1)
-			{
-				pwm_out_rx2 = pwm_out_rx2 + P_O_STEP_SIZE;
-				up_down_rx2 = 1;
-			}
+
+			update_mode = UPDATE_RX2;
 		}
 
-		if (pwm_out_rx1 > 1)
-		{
+		if (update_mode == UPDATE_RX2) {
+			if (power_total >= power_total_last) {
+				if (up_down_rx1 == UP) {
+					up_down_rx1 = UP;
+				}
+				else if (up_down_rx1 == DOWN) {
+					up_down_rx1 = DOWN;
+				}
+			}
+			else if (power_total < power_total_last) {
+				if (up_down_rx1 == UP) {
+					up_down_rx1 = DOWN;
+				}
+				else if (up_down_rx1 == DOWN) {
+					up_down_rx1 = UP;
+				}
+			}
+
+			if (up_down_rx2 == UP) {
+				pwm_out_rx2 = pwm_out_rx2 + P_O_STEP_SIZE;
+			}
+			else if (up_down_rx2 == DOWN) {
+				pwm_out_rx2 = pwm_out_rx2 - P_O_STEP_SIZE;
+			}
+
+			update_mode = UPDATE_RX1;
+		}
+
+		if (pwm_out_rx1 > 1) {
 			pwm_out_rx1 = 1;
 		}
-		else if (pwm_out_rx1 < 0)
-		{
+		else if (pwm_out_rx1 < 0) {
 			pwm_out_rx1 = 0;
 		}
 
-		if (pwm_out_rx2 > 1)
-		{
+		if (pwm_out_rx2 > 1) {
 			pwm_out_rx2 = 1;
 		}
-		else if (pwm_out_rx2 < 0)
-		{
+		else if (pwm_out_rx2 < 0) {
 			pwm_out_rx2 = 0;
 		}
 
