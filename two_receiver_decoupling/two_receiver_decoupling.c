@@ -19,7 +19,7 @@
 #define INV_FREQ 100000
 #define DEAD_TIME 500
 #define TIMER0_INTERVAL 5
-#define TIMER1_INTERVAL 100e3
+#define TIMER1_INTERVAL 750e3
 #define TIMER2_INTERVAL 1000
 #define RL1 10
 #define RL2 10
@@ -30,7 +30,7 @@
 #define UPDATE_RX2 2
 
 #define FPGA_CLK_FREQ 100e6
-#define FRAC_WIDTH 16
+#define FRAC_WIDTH 32
 
 #define DUTY_LOG_SIZE 50
 #define DUTY_UPDATE_LOG_SIZE 10
@@ -66,12 +66,16 @@ volatile float itx_ampl_ref;
 float error_crnt = 0;
 float error_prvs = 0;
 float error_integral = 0;
+float error_derivative_crnt = 0;
+float error_derivative_prvs = 0;
 float vtx_ampl_ref = 0;
 float inv_mod = 0;
 float period = 1 / (float)INV_FREQ;
 volatile float vdc;
 volatile float proportionalGain;
 volatile float integralGain;
+volatile float derivativeGain;
+volatile float tau;
 
 int state = 0;
 volatile float pwm_out_rx1 = 0;
@@ -229,27 +233,27 @@ interrupt void read_dc_current(void)
 {
 	C6657_timer0_clear_eventflag();
 
-	PEV_ad_in_4ch(BDN_PEV, 0, data);
-	dc_current_rx1 = (2.5 - data[0]) / Gth / 3;
-	dc_current_rx2 = (2.5 - data[1]) / Gth / 3;
+	// PEV_ad_in_4ch(BDN_PEV, 0, data);
+	// dc_current_rx1 = (2.5 - data[0]) / Gth / 3;
+	// dc_current_rx2 = (2.5 - data[1]) / Gth / 3;
 
-	lpf_T = 1 / (2 * 3.14 * LPF_CUTTOFF);
-	lpf_A = TIMER0_INTERVAL * 1e-6 / (TIMER0_INTERVAL * 1e-6 + 2 * lpf_T);
-	lpf_B = (TIMER0_INTERVAL * 1e-6 - 2 * lpf_T) / (TIMER0_INTERVAL * 1e-6 + 2 * lpf_T);
+	// lpf_T = 1 / (2 * 3.14 * LPF_CUTTOFF);
+	// lpf_A = TIMER0_INTERVAL * 1e-6 / (TIMER0_INTERVAL * 1e-6 + 2 * lpf_T);
+	// lpf_B = (TIMER0_INTERVAL * 1e-6 - 2 * lpf_T) / (TIMER0_INTERVAL * 1e-6 + 2 * lpf_T);
 
-	dc_current_rx1_lpf = lpf_A * dc_current_rx1 + lpf_A * dc_current_rx1_prvs - lpf_B * dc_current_rx1_lpf_prvs;
-	dc_current_rx2_lpf = lpf_A * dc_current_rx2 + lpf_A * dc_current_rx2_prvs - lpf_B * dc_current_rx2_lpf_prvs;
+	// dc_current_rx1_lpf = lpf_A * dc_current_rx1 + lpf_A * dc_current_rx1_prvs - lpf_B * dc_current_rx1_lpf_prvs;
+	// dc_current_rx2_lpf = lpf_A * dc_current_rx2 + lpf_A * dc_current_rx2_prvs - lpf_B * dc_current_rx2_lpf_prvs;
 
-	dc_current_rx1_prvs = dc_current_rx1;
-	dc_current_rx2_prvs = dc_current_rx2;
-	dc_current_rx1_lpf_prvs = dc_current_rx1_lpf;
-	dc_current_rx2_lpf_prvs = dc_current_rx2_lpf;
+	// dc_current_rx1_prvs = dc_current_rx1;
+	// dc_current_rx2_prvs = dc_current_rx2;
+	// dc_current_rx1_lpf_prvs = dc_current_rx1_lpf;
+	// dc_current_rx2_lpf_prvs = dc_current_rx2_lpf;
 
-	// ad_1_data_lpf_crnt = IPFPGA_read(BDN_FPGA1, 0x18);
-	// ad_2_data_lpf_crnt = IPFPGA_read(BDN_FPGA1, 0x19);
+	ad_1_data_lpf_crnt = IPFPGA_read(BDN_FPGA1, 0x18);
+	ad_2_data_lpf_crnt = IPFPGA_read(BDN_FPGA1, 0x19);
 
-	// dc_current_rx1_lpf = (2.5 - ad_1_data_lpf_crnt * 5. / 8000.) / Gth / 3;
-	// dc_current_rx2_lpf = (2.5 - ad_2_data_lpf_crnt * 5. / 8000.) / Gth / 3;
+	dc_current_rx1_lpf = (2.5 - ad_1_data_lpf_crnt * 5. / 8000.) / Gth / 3;
+	dc_current_rx2_lpf = (2.5 - ad_2_data_lpf_crnt * 5. / 8000.) / Gth / 3;
 }
 
 //----------------------------------------------------------------------------------------
@@ -390,8 +394,10 @@ interrupt void current_control(void)
     {
         error_crnt = itx_ampl_ref - itx_ampl;
         error_integral = error_integral + (error_crnt + error_prvs) / 2 * period;
-        vtx_ampl_ref = proportionalGain * error_crnt + integralGain * error_integral;
+		error_derivative_crnt = 2/(period+2*tau)*error_crnt - 2/(period+2*tau)*error_prvs - (period-2*tau)/(period+2*tau)*error_derivative_prvs;
+        vtx_ampl_ref = proportionalGain * error_crnt + integralGain * error_integral + derivativeGain * error_derivative_crnt;
         error_prvs = error_crnt;
+		error_derivative_prvs = error_derivative_crnt;
 
 		vtx_ampl_ref = limitter(vtx_ampl_ref, 0, vdc * 4 / PI);
 
@@ -481,9 +487,9 @@ void initialize(void)
 	PEV_init(BDN_PEV);
     PEV_inverter_disable_int(BDN_PEV);
     PEV_inverter_init(BDN_PEV, INV_FREQ, DEAD_TIME);
-    PEV_inverter_init_int_timing(BDN_PEV, 1, 3, 0);
+    PEV_inverter_init_int_timing(BDN_PEV, 1, 0, 0);
     PEV_int_init(BDN_PEV, 2, 0, 0, 0, 0, 0, 0, 0);
-    int0_init_vector(current_control, (CSL_IntcVectId)8, FALSE);
+    int0_init_vector(current_control, (CSL_IntcVectId)4, FALSE);
     PEV_inverter_control_gate(BDN_PEV, TRANS_MODE);
     PEV_inverter_set_uvw(BDN_PEV, 0, 0, 0, 0);
 
