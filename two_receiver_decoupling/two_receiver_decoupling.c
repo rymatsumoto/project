@@ -18,8 +18,8 @@
 #define TRANS_MODE 80 		//00 00 01 01 00 00
 #define INV_FREQ 100000
 #define DEAD_TIME 500
-#define TIMER0_INTERVAL 1e3
-#define TIMER1_INTERVAL 200e3
+#define TIMER0_INTERVAL 10
+#define TIMER1_INTERVAL 150e3
 #define TIMER2_INTERVAL 1e3
 #define RL1 10
 #define RL2 10
@@ -36,19 +36,20 @@
 #define DUTY_UPDATE_LOG_SIZE 10
 #define DUTY_UPDATE_LOG_INIT_VALUE 100
 #define STABILITY_CHECK_LOG_SIZE 50
-#define POWER_LOG_SIZE 100
-
-#define PI 3.14
-#define EPSILON 0.0001
+#define POWER_LOG_SIZE 75
 
 #define P_O_STEP_SIZE 0.05
 
-volatile int REF_PWMC_RX1 = 225;
-volatile int REF_PWMC_RX2 = 225;
-volatile int LPF_CUTTOFF_dsp = 1e3;
-volatile int LPF_CUTTOFF_0 = 200e3;
-volatile int LPF_CUTTOFF_1 = 1e2;
-volatile int LPF_CUTTOFF_2 = 1e2;
+#define REF_PWMC_RX1 225
+#define REF_PWMC_RX2 225
+
+#define LPF_CUTTOFF_dsp 20
+#define LPF_CUTTOFF_0 200e3
+#define LPF_CUTTOFF_1 1e2
+#define LPF_CUTTOFF_2 1e2
+
+#define PI 3.14
+#define EPSILON 0.0001
 
 volatile int start_current_control = 0;
 volatile int start_pwmc_rx1_init = 0;
@@ -88,8 +89,14 @@ int up_down_rx2 = 1;
 
 float range[] = {5., 5., 5., 5., 5., 5., 5., 5.};
 float data[] = {0., 0., 0., 0.};
-float dc_current_rx1_lpf;
-float dc_current_rx2_lpf;
+float dc_current_rx1 = 0;
+float dc_current_rx2 = 0;
+float dc_current_rx1_lpf = 0;
+float dc_current_rx2_lpf = 0;
+float dc_current_rx1_prvs = 0;
+float dc_current_rx2_prvs = 0;
+float dc_current_rx1_lpf_prvs = 0;
+float dc_current_rx2_lpf_prvs = 0;
 
 float lpf_T_dsp;
 float lpf_A_dsp;
@@ -112,9 +119,13 @@ const float Gth = 0.1042;
 float power_rx1 = 0;
 float power_rx2 = 0;
 float power_total = 0;
+float power_total_avg = 0;
+float power_total_updated = 0;
 float power_total_last = 0;
 float max_power = 0;
 int update_mode = 1;
+
+float power_log[POWER_LOG_SIZE];
 
 float duty_update_log_rx1[DUTY_UPDATE_LOG_SIZE];
 float duty_update_log_rx2[DUTY_UPDATE_LOG_SIZE];
@@ -132,9 +143,6 @@ float duty_avg_rx1 = 0;
 float duty_avg_rx2 = 0;
 
 float stability_thld = P_O_STEP_SIZE * 2 / DUTY_UPDATE_LOG_SIZE + EPSILON;
-
-float power_log[POWER_LOG_SIZE];
-float power_total_avg;
 
 //----------------------------------------------------------------------------------------
 //　移動平均
@@ -237,30 +245,19 @@ interrupt void read_dc_current(void)
 	// dc_current_rx1 = (2.5 - data[0]) / Gth / 3;
 	// dc_current_rx2 = (2.5 - data[1]) / Gth / 3;
 
-	// lpf_T = 1 / (2 * 3.14 * LPF_CUTTOFF);
-	// lpf_A = TIMER0_INTERVAL * 1e-6 / (TIMER0_INTERVAL * 1e-6 + 2 * lpf_T);
-	// lpf_B = (TIMER0_INTERVAL * 1e-6 - 2 * lpf_T) / (TIMER0_INTERVAL * 1e-6 + 2 * lpf_T);
-
-	// dc_current_rx1_lpf = lpf_A * dc_current_rx1 + lpf_A * dc_current_rx1_prvs - lpf_B * dc_current_rx1_lpf_prvs;
-	// dc_current_rx2_lpf = lpf_A * dc_current_rx2 + lpf_A * dc_current_rx2_prvs - lpf_B * dc_current_rx2_lpf_prvs;
-
-	// dc_current_rx1_prvs = dc_current_rx1;
-	// dc_current_rx2_prvs = dc_current_rx2;
-	// dc_current_rx1_lpf_prvs = dc_current_rx1_lpf;
-	// dc_current_rx2_lpf_prvs = dc_current_rx2_lpf;
-
 	ad_1_data_lpf_crnt = IPFPGA_read(BDN_FPGA1, 0x18);
 	ad_2_data_lpf_crnt = IPFPGA_read(BDN_FPGA1, 0x19);
 
-	dc_current_rx1_lpf = (2.5 - ad_1_data_lpf_crnt * 5. / 8000.) / Gth / 3;
-	dc_current_rx2_lpf = (2.5 - ad_2_data_lpf_crnt * 5. / 8000.) / Gth / 3;
+	dc_current_rx1 = (2.5 - ad_1_data_lpf_crnt * 5. / 8000.) / Gth / 3;
+	dc_current_rx2 = (2.5 - ad_2_data_lpf_crnt * 5. / 8000.) / Gth / 3;
 
-	power_rx1 = RL1 * dc_current_rx1_lpf * dc_current_rx1_lpf;
-	power_rx2 = RL2 * dc_current_rx2_lpf * dc_current_rx2_lpf;
+	dc_current_rx1_lpf = lpf_A_dsp * dc_current_rx1 + lpf_A_dsp * dc_current_rx1_prvs + lpf_B_dsp * dc_current_rx1_lpf_prvs;
+	dc_current_rx2_lpf = lpf_A_dsp * dc_current_rx2 + lpf_A_dsp * dc_current_rx2_prvs + lpf_B_dsp * dc_current_rx2_lpf_prvs;
 
-	power_total = power_rx1 + power_rx2;
-
-	power_total_avg = moving_average(power_log, POWER_LOG_SIZE, power_total);
+	dc_current_rx1_prvs = dc_current_rx1;
+	dc_current_rx2_prvs = dc_current_rx2;
+	dc_current_rx1_lpf_prvs = dc_current_rx1_lpf;
+	dc_current_rx2_lpf_prvs = dc_current_rx2_lpf;
 }
 
 //----------------------------------------------------------------------------------------
@@ -273,9 +270,11 @@ interrupt void pwmc_control(void)
 
 	if (pwmc_control_on == 1) {
 
+		power_total_updated = power_total_avg;
+
 		if (stability_check == 0) {
 			if (update_mode == UPDATE_RX1) {
-				if (power_total_avg >= power_total_last) {
+				if (power_total_updated >= power_total_last) {
 					if (up_down_rx2 == UP) {
 						up_down_rx2 = UP;
 					}
@@ -283,7 +282,7 @@ interrupt void pwmc_control(void)
 						up_down_rx2 = DOWN;
 					}
 				}
-				else if (power_total_avg < power_total_last) {
+				else if (power_total_updated < power_total_last) {
 					if (up_down_rx2 == UP) {
 						up_down_rx2 = DOWN;
 					}
@@ -305,7 +304,7 @@ interrupt void pwmc_control(void)
 			}
 
 			else if (update_mode == UPDATE_RX2) {
-				if (power_total_avg >= power_total_last) {
+				if (power_total_updated >= power_total_last) {
 					if (up_down_rx1 == UP) {
 						up_down_rx1 = UP;
 					}
@@ -313,7 +312,7 @@ interrupt void pwmc_control(void)
 						up_down_rx1 = DOWN;
 					}
 				}
-				else if (power_total_avg < power_total_last) {
+				else if (power_total_updated < power_total_last) {
 					if (up_down_rx1 == UP) {
 						up_down_rx1 = DOWN;
 					}
@@ -340,7 +339,7 @@ interrupt void pwmc_control(void)
 			duty_avg_rx1 = moving_average(duty_log_rx1, DUTY_LOG_SIZE, pwm_out_rx1); // pwm_out_rx1の移動平均を求める
 			duty_avg_rx2 = moving_average(duty_log_rx2, DUTY_LOG_SIZE, pwm_out_rx2); // pwm_out_rx2の移動平均を求める
 
-			power_total_last = power_total_avg;
+			power_total_last = power_total_updated;
 
 			// stability_check_logを更新
 			int i;
@@ -357,10 +356,10 @@ interrupt void pwmc_control(void)
 			}	
 			
 			// stability_check_logの要素が全て1ならstability_checkを1にする
-			stability_check = 1;
-			for (i = 0; i < STABILITY_CHECK_LOG_SIZE; i++) {
-				stability_check = stability_check * stability_check_log[i];
-			}
+			// stability_check = 1;
+			// for (i = 0; i < STABILITY_CHECK_LOG_SIZE; i++) {
+			// 	stability_check = stability_check * stability_check_log[i];
+			// }
 		}
 		else if (stability_check == 1) {
 			pwm_out_rx1 = duty_avg_rx1;
@@ -404,40 +403,19 @@ interrupt void current_control(void)
 }
 
 //----------------------------------------------------------------------------------------
-//　FPGA設定の更新
+//　受電電力の合計を計算
 //----------------------------------------------------------------------------------------
 
-interrupt void update_fpga_config(void)
+interrupt void calculate_total_power(void)
 {
 	C6657_timer2_clear_eventflag();
 
-	lpf_T_dsp = 1 / (2 * PI * LPF_CUTTOFF_dsp);
-	lpf_A_dsp = 1. / INV_FREQ / (1. / INV_FREQ + 2 * lpf_T_dsp);
-	lpf_B_dsp = (2 * lpf_T_dsp - 1. / INV_FREQ) / (2 * lpf_T_dsp + 1. / INV_FREQ);
+	power_rx1 = RL1 * dc_current_rx1_lpf * dc_current_rx1_lpf;
+	power_rx2 = RL2 * dc_current_rx2_lpf * dc_current_rx2_lpf;
 
-	lpf_T_0 = 1 / (2 * PI * LPF_CUTTOFF_0);
-	lpf_A_0 = 1. / FPGA_CLK_FREQ / (1. / FPGA_CLK_FREQ + 2 * lpf_T_0);
-	lpf_B_0 = (2 * lpf_T_0 - 1. / FPGA_CLK_FREQ) / (2 * lpf_T_0 + 1. / FPGA_CLK_FREQ);
+	power_total = power_rx1 + power_rx2;
 
-	lpf_T_1 = 1 / (2 * PI * LPF_CUTTOFF_1);
-	lpf_A_1 = 1. / FPGA_CLK_FREQ / (1. / FPGA_CLK_FREQ + 2 * lpf_T_1);
-	lpf_B_1 = (2 * lpf_T_1 - 1. / FPGA_CLK_FREQ) / (2 * lpf_T_1 + 1. / FPGA_CLK_FREQ);
-
-	lpf_T_2 = 1 / (2 * PI * LPF_CUTTOFF_2);
-	lpf_A_2 = 1. / FPGA_CLK_FREQ / (1. / FPGA_CLK_FREQ + 2 * lpf_T_2);
-	lpf_B_2 = (2 * lpf_T_2 - 1. / FPGA_CLK_FREQ) / (2 * lpf_T_2 + 1. / FPGA_CLK_FREQ);
-
-	IPFPGA_write(BDN_FPGA1, 0x15, convert_binary(lpf_A_0));
-	IPFPGA_write(BDN_FPGA1, 0x16, convert_binary(lpf_B_0));
-	
-	IPFPGA_write(BDN_FPGA1, 0x17, convert_binary(lpf_A_1));
-	IPFPGA_write(BDN_FPGA1, 0x18, convert_binary(lpf_B_1));
-
-	IPFPGA_write(BDN_FPGA1, 0x19, convert_binary(lpf_A_2));
-	IPFPGA_write(BDN_FPGA1, 0x1a, convert_binary(lpf_B_2));
-
-	IPFPGA_write(BDN_FPGA1, 0x09, REF_PWMC_RX1);
-	IPFPGA_write(BDN_FPGA2, 0x09, REF_PWMC_RX2);
+	power_total_avg = moving_average(power_log, POWER_LOG_SIZE, power_total);
 }
 
 //----------------------------------------------------------------------------------------
@@ -462,6 +440,34 @@ void initialize(void)
 	for (i = 0; i < POWER_LOG_SIZE; i++) {
 		power_log[i] = 0;
 	}
+
+	lpf_T_dsp = 1 / (2 * PI * LPF_CUTTOFF_dsp);
+	lpf_A_dsp = TIMER0_INTERVAL * 1e-6 / (TIMER0_INTERVAL * 1e-6 + 2 * lpf_T_dsp);
+	lpf_B_dsp = (2 * lpf_T_dsp - TIMER0_INTERVAL * 1e-6) / (2 * lpf_T_dsp + TIMER0_INTERVAL * 1e-6);
+
+	lpf_T_0 = 1 / (2 * PI * LPF_CUTTOFF_0);
+	lpf_A_0 = 1. / FPGA_CLK_FREQ / (1. / FPGA_CLK_FREQ + 2 * lpf_T_0);
+	lpf_B_0 = (2 * lpf_T_0 - 1. / FPGA_CLK_FREQ) / (2 * lpf_T_0 + 1. / FPGA_CLK_FREQ);
+
+	lpf_T_1 = 1 / (2 * PI * LPF_CUTTOFF_1);
+	lpf_A_1 = 1. / FPGA_CLK_FREQ / (1. / FPGA_CLK_FREQ + 2 * lpf_T_1);
+	lpf_B_1 = (2 * lpf_T_1 - 1. / FPGA_CLK_FREQ) / (2 * lpf_T_1 + 1. / FPGA_CLK_FREQ);
+
+	lpf_T_2 = 1 / (2 * PI * LPF_CUTTOFF_2);
+	lpf_A_2 = 1. / FPGA_CLK_FREQ / (1. / FPGA_CLK_FREQ + 2 * lpf_T_2);
+	lpf_B_2 = (2 * lpf_T_2 - 1. / FPGA_CLK_FREQ) / (2 * lpf_T_2 + 1. / FPGA_CLK_FREQ);
+
+	IPFPGA_write(BDN_FPGA1, 0x15, convert_binary(lpf_A_0));
+	IPFPGA_write(BDN_FPGA1, 0x16, convert_binary(lpf_B_0));
+	
+	IPFPGA_write(BDN_FPGA1, 0x17, convert_binary(lpf_A_1));
+	IPFPGA_write(BDN_FPGA1, 0x18, convert_binary(lpf_B_1));
+
+	IPFPGA_write(BDN_FPGA1, 0x19, convert_binary(lpf_A_2));
+	IPFPGA_write(BDN_FPGA1, 0x1a, convert_binary(lpf_B_2));
+
+	IPFPGA_write(BDN_FPGA1, 0x09, REF_PWMC_RX1);
+	IPFPGA_write(BDN_FPGA2, 0x09, REF_PWMC_RX2);
 
 	PEV_ad_set_range(BDN_PEV, range);
 	PEV_ad_set_mode(BDN_PEV, 0);
@@ -503,7 +509,7 @@ void initialize(void)
 	C6657_timer1_start();
 
 	C6657_timer2_init(TIMER2_INTERVAL);
-	C6657_timer2_init_vector(update_fpga_config, (CSL_IntcVectId)7);
+	C6657_timer2_init_vector(calculate_total_power, (CSL_IntcVectId)7);
 	C6657_timer2_start();
 
     PEV_inverter_enable_int(BDN_PEV);
