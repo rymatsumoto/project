@@ -19,7 +19,7 @@
 #define INV_FREQ 100000
 #define DEAD_TIME 500
 #define TIMER0_INTERVAL 10
-#define TIMER1_INTERVAL 250e3
+#define TIMER1_INTERVAL 350e3
 #define TIMER2_INTERVAL 1e3
 #define RL1 10
 #define RL2 10
@@ -27,7 +27,7 @@
 #define FPGA_CLK_FREQ 100e6
 #define FRAC_WIDTH 32
 
-#define POWER_LOG_SIZE 150
+#define POWER_LOG_SIZE 250
 
 #define REF_PWMC_RX1 225
 #define REF_PWMC_RX2 225
