@@ -19,7 +19,7 @@
 #define INV_FREQ 100000
 #define DEAD_TIME 500
 #define TIMER0_INTERVAL 10
-#define TIMER1_INTERVAL 150e3
+#define TIMER1_INTERVAL 500e3
 #define TIMER2_INTERVAL 1e3
 #define RL1 10
 #define RL2 10
@@ -32,11 +32,11 @@
 #define FPGA_CLK_FREQ 100e6
 #define FRAC_WIDTH 32
 
-#define DUTY_LOG_SIZE 50
+#define DUTY_LOG_SIZE 24
 #define DUTY_UPDATE_LOG_SIZE 10
 #define DUTY_UPDATE_LOG_INIT_VALUE 100
-#define STABILITY_CHECK_LOG_SIZE 50
-#define POWER_LOG_SIZE 75
+#define STABILITY_CHECK_LOG_SIZE 24
+#define POWER_LOG_SIZE 250
 
 #define P_O_STEP_SIZE 0.05
 
@@ -51,6 +51,7 @@
 #define PI 3.14
 #define EPSILON 0.0001
 
+volatile int start_inv_w_o_control = 0;
 volatile int start_current_control = 0;
 volatile int start_pwmc_rx1_init = 0;
 volatile int start_pwmc_rx2_init = 0;
@@ -98,6 +99,9 @@ float dc_current_rx2_prvs = 0;
 float dc_current_rx1_lpf_prvs = 0;
 float dc_current_rx2_lpf_prvs = 0;
 
+volatile float dc_current_rx1_weight = 1;
+volatile float dc_current_rx2_weight = 1;
+
 float lpf_T_dsp;
 float lpf_A_dsp;
 float lpf_B_dsp;
@@ -143,6 +147,8 @@ float duty_avg_rx1 = 0;
 float duty_avg_rx2 = 0;
 
 float stability_thld = P_O_STEP_SIZE * 2 / DUTY_UPDATE_LOG_SIZE + EPSILON;
+
+volatile float duty_w_o_control = 1;
 
 //----------------------------------------------------------------------------------------
 //　移動平均
@@ -248,8 +254,8 @@ interrupt void read_dc_current(void)
 	ad_1_data_lpf_crnt = IPFPGA_read(BDN_FPGA1, 0x18);
 	ad_2_data_lpf_crnt = IPFPGA_read(BDN_FPGA1, 0x19);
 
-	dc_current_rx1 = (2.5 - ad_1_data_lpf_crnt * 5. / 8000.) / Gth / 3;
-	dc_current_rx2 = (2.5 - ad_2_data_lpf_crnt * 5. / 8000.) / Gth / 3;
+	dc_current_rx1 = (2.5 - ad_1_data_lpf_crnt * 5. / 8000.) / Gth / 3 * dc_current_rx1_weight;
+	dc_current_rx2 = (2.5 - ad_2_data_lpf_crnt * 5. / 8000.) / Gth / 3 * dc_current_rx2_weight;;
 
 	dc_current_rx1_lpf = lpf_A_dsp * dc_current_rx1 + lpf_A_dsp * dc_current_rx1_prvs + lpf_B_dsp * dc_current_rx1_lpf_prvs;
 	dc_current_rx2_lpf = lpf_A_dsp * dc_current_rx2 + lpf_A_dsp * dc_current_rx2_prvs + lpf_B_dsp * dc_current_rx2_lpf_prvs;
@@ -356,10 +362,10 @@ interrupt void pwmc_control(void)
 			}	
 			
 			// stability_check_logの要素が全て1ならstability_checkを1にする
-			// stability_check = 1;
-			// for (i = 0; i < STABILITY_CHECK_LOG_SIZE; i++) {
-			// 	stability_check = stability_check * stability_check_log[i];
-			// }
+			stability_check = 1;
+			for (i = 0; i < STABILITY_CHECK_LOG_SIZE; i++) {
+				stability_check = stability_check * stability_check_log[i];
+			}
 		}
 		else if (stability_check == 1) {
 			pwm_out_rx1 = duty_avg_rx1;
@@ -400,6 +406,10 @@ interrupt void current_control(void)
 
         PEV_inverter_set_uvw(BDN_PEV, -inv_mod, inv_mod, 0, 0);
     }
+	else
+	{
+		PEV_inverter_set_uvw(BDN_PEV, duty_w_o_control-1, 1-duty_w_o_control, 0, 0);
+	}
 }
 
 //----------------------------------------------------------------------------------------
@@ -530,6 +540,10 @@ void MW_main(void)
 
 	while(1)
 	{
+		if (start_inv_w_o_control == 1) {
+			PEV_inverter_start_pwm(BDN_PEV);
+			start_inv_w_o_control = -1;
+		}
 		if (start_current_control == 1) {
 			PEV_inverter_start_pwm(BDN_PEV);
 			current_control_on = 1;
