@@ -19,6 +19,8 @@
 
 #define PI 3.14
 
+#define LPF_CUTTOFF 10e3
+
 int carrier_cnt_max;
 int carrier_cnt_hlf;
 
@@ -34,13 +36,17 @@ int peak_count_i2 = 530;
 #define R1 50e-3
 #define R2 50e-3
 float wr = INV_FREQ * PI * 2;
-float Ts = 1. / INV_FREQ / 4;
+float Ts_mpc = 1. / INV_FREQ / 4;
+float Ts_lpf = 1. / INV_FREQ / 2;
 float Lsig1 = L1 - M * M / L2;
 float Lsig2 = L2 - M * M / L1;
 
 float mpc_a;
 float mpc_b;
 float mpc_c;
+float tau;
+float lpf_a;
+float lpf_b;
 int v1d_scale = Vdc * 4. / PI * 64;
 
 volatile int trans_start = 0;
@@ -88,9 +94,13 @@ int convert_binary(float f)
 
 void initialize(void)
 {
-	mpc_a = 1 - R1 * Ts / Lsig1;
-	mpc_b = M * Ts / (Lsig1 * L2 * wr * C2);
-	mpc_c = Ts / Lsig1;
+	mpc_a = 1 - R1 * Ts_mpc / Lsig1;
+	mpc_b = M * Ts_mpc / (Lsig1 * L2 * wr * C2);
+	mpc_c = Ts_mpc / Lsig1;
+
+	tau = 1. / (2 * PI * LPF_CUTTOFF);
+	lpf_a = Ts_lpf / (Ts_lpf + 2 * tau);
+	lpf_b = (2 * tau - Ts_lpf) / (2 * tau + Ts_lpf);
 
 	carrier_cnt_max = 50000000. / INV_FREQ;
 	carrier_cnt_hlf = 25000000. / INV_FREQ;
@@ -104,7 +114,10 @@ void initialize(void)
 	IPFPGA_write(BDN_FPGA, 0x13, convert_binary(mpc_a));
 	IPFPGA_write(BDN_FPGA, 0x14, convert_binary(mpc_b));
 	IPFPGA_write(BDN_FPGA, 0x15, convert_binary(mpc_c));
-	IPFPGA_write(BDN_FPGA, 0x16, v1d_scale);
+	IPFPGA_write(BDN_FPGA, 0x16, convert_binary(lpf_a));
+	IPFPGA_write(BDN_FPGA, 0x17, convert_binary(lpf_b));
+	IPFPGA_write(BDN_FPGA, 0x18, v1d_scale);
+	IPFPGA_write(BDN_FPGA, 0x19, 300000);
 }
 
 //----------------------------------------------------------------------------------------
