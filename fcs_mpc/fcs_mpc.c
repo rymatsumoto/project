@@ -17,9 +17,9 @@
 #define DEAD_TIME 300
 #define FRAC_WIDTH 16
 
-#define PI 3.14
+#define TIMER0_INTERVAL 1000
 
-#define LPF_CUTTOFF 10e3
+#define PI 3.14
 
 int carrier_cnt_max;
 int carrier_cnt_hlf;
@@ -50,6 +50,9 @@ float lpf_b;
 int v1d_scale = Vdc * 4. / PI * 64;
 
 volatile int trans_start = 0;
+
+volatile int Pref = 50;
+volatile int lpf_cuttoff = 10e3;
 
 //----------------------------------------------------------------------------------------
 //　FPGAに書き込む定数の計算
@@ -89,6 +92,24 @@ int convert_binary(float f)
 }
 
 //----------------------------------------------------------------------------------------
+//　FPGA設定変更
+//----------------------------------------------------------------------------------------
+
+interrupt void fpga_config(void)
+{
+	C6657_timer0_clear_eventflag();
+
+	tau = 1. / (2 * PI * lpf_cuttoff);
+	lpf_a = Ts_lpf / (Ts_lpf + 2 * tau);
+	lpf_b = (2 * tau - Ts_lpf) / (2 * tau + Ts_lpf);
+
+	IPFPGA_write(BDN_FPGA, 0x16, convert_binary(lpf_a));
+	IPFPGA_write(BDN_FPGA, 0x17, convert_binary(lpf_b));
+
+	IPFPGA_write(BDN_FPGA, 0x19, Pref * 64 * 64);
+}
+
+//----------------------------------------------------------------------------------------
 //　初期化
 //----------------------------------------------------------------------------------------
 
@@ -98,7 +119,7 @@ void initialize(void)
 	mpc_b = M * Ts_mpc / (Lsig1 * L2 * wr * C2);
 	mpc_c = Ts_mpc / Lsig1;
 
-	tau = 1. / (2 * PI * LPF_CUTTOFF);
+	tau = 1. / (2 * PI * lpf_cuttoff);
 	lpf_a = Ts_lpf / (Ts_lpf + 2 * tau);
 	lpf_b = (2 * tau - Ts_lpf) / (2 * tau + Ts_lpf);
 
@@ -117,7 +138,16 @@ void initialize(void)
 	IPFPGA_write(BDN_FPGA, 0x16, convert_binary(lpf_a));
 	IPFPGA_write(BDN_FPGA, 0x17, convert_binary(lpf_b));
 	IPFPGA_write(BDN_FPGA, 0x18, v1d_scale);
-	IPFPGA_write(BDN_FPGA, 0x19, 300000);
+	IPFPGA_write(BDN_FPGA, 0x19, Pref * 64 * 64);
+
+	int_disable();
+
+	C6657_timer0_init(TIMER0_INTERVAL);
+	C6657_timer0_init_vector(fpga_config, (CSL_IntcVectId)5);
+	C6657_timer0_start();
+
+	C6657_timer0_enable_int();
+	int_enable();
 }
 
 //----------------------------------------------------------------------------------------
