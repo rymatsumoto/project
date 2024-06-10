@@ -11,13 +11,13 @@
 
 #include <mwio4.h>
 
-#define BDN_FPGA 0
+#define BDN_FPGA 1
 
 #define INV_FREQ 83000
-#define DEAD_TIME 300
+#define DEAD_TIME 500
 #define FRAC_WIDTH 16
 
-#define TIMER0_INTERVAL 1000
+#define TIMER0_INTERVAL 10
 
 #define PI 3.14
 
@@ -27,7 +27,7 @@ int carrier_cnt_hlf;
 int peak_count_i1 = 230;
 int peak_count_i2 = 530;
 
-#define Vdc 20
+#define Vdc 40
 #define L1 30e-6
 #define L2 30e-6
 #define M 6.4e-6
@@ -35,11 +35,12 @@ int peak_count_i2 = 530;
 #define C2 122e-9
 #define R1 50e-3
 #define R2 50e-3
+
+#define ATTENUATION 1.108
+
 float wr = INV_FREQ * PI * 2;
-float Ts_mpc = 1. / INV_FREQ / 4;
+float Ts_mpc = 1. / INV_FREQ / 2;
 float Ts_lpf = 1. / INV_FREQ / 2;
-float Lsig1 = L1 - M * M / L2;
-float Lsig2 = L2 - M * M / L1;
 
 float mpc_a;
 float mpc_b;
@@ -47,10 +48,11 @@ float mpc_c;
 float tau;
 float lpf_a;
 float lpf_b;
-int v1d_scale = Vdc * 4. / PI * 64;
+int v1d_scale = Vdc * 4. / PI * 64 / ATTENUATION;
 
 volatile int trans_start = 0;
 
+float p1_lpf = 0;
 volatile int Pref = 50;
 volatile int lpf_cuttoff = 10e3;
 
@@ -99,6 +101,8 @@ interrupt void fpga_config(void)
 {
 	C6657_timer0_clear_eventflag();
 
+	p1_lpf = IPFPGA_read(BDN_FPGA, 0x17) * ATTENUATION * ATTENUATION / 64. / 64.;
+
 	tau = 1. / (2 * PI * lpf_cuttoff);
 	lpf_a = Ts_lpf / (Ts_lpf + 2 * tau);
 	lpf_b = (2 * tau - Ts_lpf) / (2 * tau + Ts_lpf);
@@ -106,7 +110,7 @@ interrupt void fpga_config(void)
 	IPFPGA_write(BDN_FPGA, 0x16, convert_binary(lpf_a));
 	IPFPGA_write(BDN_FPGA, 0x17, convert_binary(lpf_b));
 
-	IPFPGA_write(BDN_FPGA, 0x19, Pref * 64 * 64);
+	IPFPGA_write(BDN_FPGA, 0x19, Pref * 64 * 64 / ATTENUATION / ATTENUATION);
 }
 
 //----------------------------------------------------------------------------------------
@@ -115,9 +119,9 @@ interrupt void fpga_config(void)
 
 void initialize(void)
 {
-	mpc_a = 1 - R1 * Ts_mpc / Lsig1;
-	mpc_b = M * Ts_mpc / (Lsig1 * L2 * wr * C2);
-	mpc_c = Ts_mpc / Lsig1;
+	mpc_a = 1 - R1 * Ts_mpc / (2 * L1);
+	mpc_b = wr * M * Ts_mpc / (2 * L1);
+	mpc_c = Ts_mpc / (2 * L1);
 
 	tau = 1. / (2 * PI * lpf_cuttoff);
 	lpf_a = Ts_lpf / (Ts_lpf + 2 * tau);
@@ -138,7 +142,7 @@ void initialize(void)
 	IPFPGA_write(BDN_FPGA, 0x16, convert_binary(lpf_a));
 	IPFPGA_write(BDN_FPGA, 0x17, convert_binary(lpf_b));
 	IPFPGA_write(BDN_FPGA, 0x18, v1d_scale);
-	IPFPGA_write(BDN_FPGA, 0x19, Pref * 64 * 64);
+	IPFPGA_write(BDN_FPGA, 0x19, Pref * 64 * 64 / ATTENUATION / ATTENUATION);
 
 	int_disable();
 
