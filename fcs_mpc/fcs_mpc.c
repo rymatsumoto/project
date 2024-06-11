@@ -55,6 +55,10 @@ volatile int trans_start = 0;
 float p1_lpf = 0;
 volatile int Pref = 50;
 volatile int lpf_cuttoff = 10e3;
+volatile int Pref_update = 0;
+
+int counter = 0;
+volatile int update_Pref_count = 1000;
 
 //----------------------------------------------------------------------------------------
 //　FPGAに書き込む定数の計算
@@ -110,7 +114,25 @@ interrupt void fpga_config(void)
 	IPFPGA_write(BDN_FPGA, 0x16, convert_binary(lpf_a));
 	IPFPGA_write(BDN_FPGA, 0x17, convert_binary(lpf_b));
 
-	IPFPGA_write(BDN_FPGA, 0x19, Pref * 64 * 64 / ATTENUATION / ATTENUATION);
+	if (Pref_update == 0)
+	{
+		IPFPGA_write(BDN_FPGA, 0x19, Pref * 64 * 64 / ATTENUATION / ATTENUATION);
+	}
+	else
+	{
+		if (trans_start == -1)
+		{
+			counter += 1;
+			if (counter < update_Pref_count)
+			{
+				IPFPGA_write(BDN_FPGA, 0x19, Pref * 64 * 64 / ATTENUATION / ATTENUATION);
+			}
+			if (counter >= update_Pref_count)
+			{
+				IPFPGA_write(BDN_FPGA, 0x19, Pref_update * 64 * 64 / ATTENUATION / ATTENUATION);
+			}
+		}
+	}
 }
 
 //----------------------------------------------------------------------------------------
@@ -149,8 +171,8 @@ void initialize(void)
 	C6657_timer0_init(TIMER0_INTERVAL);
 	C6657_timer0_init_vector(fpga_config, (CSL_IntcVectId)5);
 	C6657_timer0_start();
-
 	C6657_timer0_enable_int();
+
 	int_enable();
 }
 
