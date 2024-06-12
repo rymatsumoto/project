@@ -241,7 +241,7 @@ interrupt void read_dc_current(void)
 	ad_2_data_lpf_crnt = IPFPGA_read(BDN_FPGA1, 0x19);
 
 	dc_current_rx1 = (2.5 - ad_1_data_lpf_crnt * 5. / 8000.) / Gth / 3 * dc_current_rx1_weight;
-	dc_current_rx2 = (2.5 - ad_2_data_lpf_crnt * 5. / 8000.) / Gth / 3 * dc_current_rx2_weight;;
+	dc_current_rx2 = (2.5 - ad_2_data_lpf_crnt * 5. / 8000.) / Gth / 3 * dc_current_rx2_weight;
 
 	dc_current_rx1_lpf = lpf_A_dsp * dc_current_rx1 + lpf_A_dsp * dc_current_rx1_prvs + lpf_B_dsp * dc_current_rx1_lpf_prvs;
 	dc_current_rx2_lpf = lpf_A_dsp * dc_current_rx2 + lpf_A_dsp * dc_current_rx2_prvs + lpf_B_dsp * dc_current_rx2_lpf_prvs;
