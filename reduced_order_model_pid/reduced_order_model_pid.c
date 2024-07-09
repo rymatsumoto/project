@@ -7,8 +7,8 @@
 
 #include    <mwio4.h>
 
-#define BDN0 1              //PEVボード
-#define BDN1 1              //FPGAボード
+#define BDN0 0              //PEVボード
+#define BDN1 0              //FPGAボード
                             //WN WP VN VP UN UP
 #define TRANS_MODE 80       //00 00 01 01 00 00
 #define INV_FREQ 85000
@@ -16,8 +16,7 @@
 
 INT32 adc_0_data_peak;
 float i1_ampl;
-//volatile float i1_weight = 1.18;
-volatile float i1_weight_pos = 1.18;
+volatile float i1_weight_pos = 1.1;
 volatile float i1_weight_neg = 1;
 volatile float i1_ampl_ref;
 float v1_ampl_ref = 0;
@@ -35,7 +34,8 @@ float error_derivative_crnt = 0;
 float error_derivative_prvs = 0;
 float period = 1 / (float)INV_FREQ / 2;
 volatile float v1dc;
-volatile float inv_mod_BDN0 = 1;
+float inv_mod_BDN0 = 1;
+volatile float duty_w_o_control = 0;
 const float pi = 3.14;
 
 //----------------------------------------------------------------------------------------
@@ -105,7 +105,7 @@ void current_control(void)
     }
     else
     {
-        PEV_inverter_set_uvw(BDN0, -inv_mod_BDN0, inv_mod_BDN0, 0, 0);
+        PEV_inverter_set_uvw(BDN0, duty_w_o_control-1, 1-duty_w_o_control, 0, 0);
     }
 }
 
