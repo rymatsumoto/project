@@ -18,14 +18,14 @@
 #define TRANS_MODE 80 		//00 00 01 01 00 00
 #define INV_FREQ 100000
 #define DEAD_TIME 500
-#define TIMER0_INTERVAL 10
-#define TIMER1_INTERVAL 200e3
+#define TIMER0_INTERVAL 35
+#define TIMER1_INTERVAL 100e3
 
 #define FPGA_CLK_FREQ 100e6
 #define FRAC_WIDTH 32
 
 #define LPF_CUTOFF_0 200e3
-#define LPF_CUTOFF_1 1e2
+#define LPF_CUTOFF_1 100
 
 #define REF_PWMC_RX1 225
 #define REF_PWMC_RX2 225
@@ -62,6 +62,8 @@ float lpf_A_1;
 float lpf_B_1;
 
 // FPGA AD変換結果読み出し
+INT32 ad_0_data;
+INT32 ad_1_data;
 INT32 ad_0_data_lpf_peak;
 INT32 ad_1_data_lpf_crnt;
 
@@ -69,6 +71,11 @@ INT32 ad_1_data_lpf_crnt;
 const float Gth = 0.1042;
 float dc_current_lpf = 0;
 float dc_current_avg = 0;
+float range[] = {5., 5., 5., 5., 5., 5., 5., 5.};
+float data[] = {0., 0., 0., 0.};
+float tx_dc_current = 0;
+float rx1_dc_current = 0;
+float rx2_dc_current = 0;
 
 // 電流制御
 float itx_ampl = 0;
@@ -190,16 +197,24 @@ float limitter(float input_value, float lower_limit, float upper_limit)
 }
 
 //----------------------------------------------------------------------------------------
-//　送電側DC電流読み出し
+//　DC電流読み出し
 //----------------------------------------------------------------------------------------
 
 interrupt void read_dc_current(void)
 {
 	C6657_timer0_clear_eventflag();
 
+	ad_0_data = IPFPGA_read(BDN_FPGA1, 0x08);
+	ad_1_data = IPFPGA_read(BDN_FPGA1, 0x09);
+	tx_dc_current = (ad_1_data * 5. / 8000. - 2.5) / Gth / 3;
+
 	ad_1_data_lpf_crnt = IPFPGA_read(BDN_FPGA1, 0x18);
 	dc_current_lpf = (ad_1_data_lpf_crnt * 5. / 8000. - 2.5) / Gth / 3;
 	dc_current_avg = dc_current_lpf;
+
+    PEV_ad_in_4ch(BDN_PEV, 0, data);
+    rx1_dc_current = (data[0] - 2.5) / Gth / 3;
+    rx2_dc_current = (data[1] - 2.5) / Gth / 3;
 }
 
 //----------------------------------------------------------------------------------------
@@ -294,6 +309,10 @@ interrupt void pwmc_control(void)
 
 void initialize(void)
 {
+	// AD変換設定
+    PEV_ad_set_range(BDN_PEV, range);
+    PEV_ad_set_mode(BDN_PEV, 0);
+
 	// FPGA LPF設定
 	lpf_T_0 = 1 / (2 * PI * LPF_CUTOFF_0);
 	lpf_A_0 = 1. / FPGA_CLK_FREQ / (1. / FPGA_CLK_FREQ + 2 * lpf_T_0);
