@@ -11,13 +11,15 @@
 
 #include <mwio4.h>
 
-#define BDN_FPGA 1
+#define BDN_PEV  0
+#define BDN_FPGA 0
 
 #define INV_FREQ 83000
 #define DEAD_TIME 500
 #define FRAC_WIDTH 16
 
 #define TIMER0_INTERVAL 10
+#define TIMER1_INTERVAL 100
 
 #define PI 3.14
 
@@ -36,7 +38,7 @@ int peak_count_i2 = 530;
 #define R1 50e-3
 #define R2 50e-3
 
-#define ATTENUATION 1.108
+#define ATTENUATION 1.1
 
 float wr = INV_FREQ * PI * 2;
 float Ts_mpc = 1. / INV_FREQ / 2;
@@ -57,8 +59,16 @@ volatile int Pref = 50;
 volatile int lpf_cuttoff = 10e3;
 volatile int Pref_update = 0;
 
-int counter = 0;
-volatile int update_Pref_count = 1000;
+// int counter = 0;
+// volatile int update_Pref_count = 1000;
+volatile int update_start = 0;
+
+float range[] = {5., 5., 5., 5., 5., 5., 5., 5.};
+float data[] = {0., 0., 0., 0.};
+float tx_dc_current = 0;
+float rx_dc_current = 0;
+float input_dc_power = 0;
+float output_dc_power = 0;
 
 //----------------------------------------------------------------------------------------
 //　FPGAに書き込む定数の計算
@@ -120,19 +130,40 @@ interrupt void fpga_config(void)
 	}
 	else
 	{
-		if (trans_start == -1)
-		{
-			counter += 1;
-			if (counter < update_Pref_count)
-			{
-				IPFPGA_write(BDN_FPGA, 0x19, Pref * 64 * 64 / ATTENUATION / ATTENUATION);
-			}
-			if (counter >= update_Pref_count)
-			{
-				IPFPGA_write(BDN_FPGA, 0x19, Pref_update * 64 * 64 / ATTENUATION / ATTENUATION);
-			}
+		// if (trans_start == -1)
+		// {
+		// 	counter += 1;
+		// 	if (counter < update_Pref_count)
+		// 	{
+		// 		IPFPGA_write(BDN_FPGA, 0x19, Pref * 64 * 64 / ATTENUATION / ATTENUATION);
+		// 	}
+		// 	if (counter >= update_Pref_count)
+		// 	{
+		// 		IPFPGA_write(BDN_FPGA, 0x19, Pref_update * 64 * 64 / ATTENUATION / ATTENUATION);
+		// 	}
+		// }
+
+		if (update_start == 1) {
+			Pref = Pref_update;
 		}
+		IPFPGA_write(BDN_FPGA, 0x19, Pref * 64 * 64 / ATTENUATION / ATTENUATION);
 	}
+}
+
+//----------------------------------------------------------------------------------------
+//　DC電流読み出し
+//----------------------------------------------------------------------------------------
+
+interrupt void read_dc_current(void)
+{
+	C6657_timer1_clear_eventflag();
+
+    PEV_ad_in_4ch(BDN_PEV, 0, data);
+    tx_dc_current = data[0] * 25;
+    rx_dc_current = data[1] * 25;
+
+    input_dc_power = tx_dc_current * Vdc;
+    output_dc_power = rx_dc_current * Vdc;
 }
 
 //----------------------------------------------------------------------------------------
@@ -141,6 +172,9 @@ interrupt void fpga_config(void)
 
 void initialize(void)
 {
+    PEV_ad_set_range(BDN_PEV, range);
+    PEV_ad_set_mode(BDN_PEV, 0);
+
 	mpc_a = 1 - R1 * Ts_mpc / (2 * L1);
 	mpc_b = wr * M * Ts_mpc / (2 * L1);
 	mpc_c = Ts_mpc / (2 * L1);
@@ -172,6 +206,11 @@ void initialize(void)
 	C6657_timer0_init_vector(fpga_config, (CSL_IntcVectId)5);
 	C6657_timer0_start();
 	C6657_timer0_enable_int();
+
+	C6657_timer1_init(TIMER1_INTERVAL);
+	C6657_timer1_init_vector(read_dc_current, (CSL_IntcVectId)7);
+	C6657_timer1_start();
+	C6657_timer1_enable_int();
 
 	int_enable();
 }

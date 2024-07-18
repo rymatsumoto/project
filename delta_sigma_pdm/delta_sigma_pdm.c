@@ -10,19 +10,21 @@
 *********************************************************/
 #include <mwio4.h>
 
-#define BDN_FPGA 1 //FPGAボード
+#define BDN_PEV  0 //PEVボード
+#define BDN_FPGA 0 //FPGAボード
 
 #define INV_FREQ 83000
 #define DEAD_TIME 500
 #define FRAC_WIDTH 16
 
 #define TIMER0_INTERVAL 1000
-#define TIMER1_INTERVAL 4000
+#define TIMER1_INTERVAL 10
+#define TIMER2_INTERVAL 10
 
 #define PI 3.14
 
 #define Vdc 40
-#define ATTENUATION 1.108
+#define ATTENUATION 1.1
 
 int peak_count_i1 = 230;
 
@@ -42,8 +44,8 @@ volatile int ref_full_scale = 1000;
 
 int carrier_cnt_max;
 
-float p1_lpf = 0;
-volatile float p1_ref = 0;
+float Plpf = 0;
+volatile float Pref = 0;
 
 float error_crnt = 0;
 float error_prvs = 0;
@@ -53,6 +55,18 @@ float v1_ampl_ref = 0;
 float pdm_duty_ref = 0;
 volatile float proportionalGain;
 volatile float integralGain;
+volatile int Pref_update = 0;
+// int counter = 0;
+// volatile int update_Pref_count = 1000;
+volatile int update_start = 0;
+
+const float Gth = 0.1042;
+float range[] = {5., 5., 5., 5., 5., 5., 5., 5.};
+float data[] = {0., 0., 0., 0.};
+float tx_dc_current = 0;
+float rx_dc_current = 0;
+float input_dc_power = 0;
+float output_dc_power = 0;
 
 //----------------------------------------------------------------------------------------
 //　FPGAに書き込む定数の計算
@@ -115,10 +129,21 @@ interrupt void update_pdm(void)
 {
 	C6657_timer1_clear_eventflag();
 
-	p1_lpf = IPFPGA_read(BDN_FPGA, 0x17) * ATTENUATION * ATTENUATION / 64. / 64.;
+	Plpf = IPFPGA_read(BDN_FPGA, 0x17) * ATTENUATION * ATTENUATION / 64. / 64.;
 
 	if (control_on == 1) {
-		error_crnt = p1_ref - p1_lpf;
+		// if (Pref_update != 0)
+		// {
+		// 	counter += 1;
+		// 	if (counter >= update_Pref_count)
+		// 	{
+		// 		Pref = Pref_update;
+		// 	}
+		// }
+		if (update_start == 1) {
+			Pref = Pref_update;
+		}
+		error_crnt = Pref - Plpf;
 		error_integral = error_integral + (error_crnt + error_prvs) / 2 * period;
         v1_ampl_ref = proportionalGain * error_crnt + integralGain * error_integral;
         error_prvs = error_crnt;
@@ -143,11 +168,29 @@ interrupt void update_pdm(void)
 }
 
 //----------------------------------------------------------------------------------------
+//　DC電流読み出し
+//----------------------------------------------------------------------------------------
+
+interrupt void read_dc_current(void)
+{
+	C6657_timer2_clear_eventflag();
+
+    PEV_ad_in_4ch(BDN_PEV, 0, data);
+    tx_dc_current = data[0] * 25;
+    rx_dc_current = data[1] * 25;
+
+    input_dc_power = tx_dc_current * Vdc;
+    output_dc_power = rx_dc_current * Vdc;
+}
+
+//----------------------------------------------------------------------------------------
 //　初期化
 //----------------------------------------------------------------------------------------
 
 void initialize(void)
 {
+    PEV_ad_set_range(BDN_PEV, range);
+    PEV_ad_set_mode(BDN_PEV, 0);
 
 	tau = 1. / (2 * PI * lpf_cuttoff);
 	lpf_a = Ts_lpf / (Ts_lpf + 2 * tau);
@@ -165,14 +208,22 @@ void initialize(void)
 	IPFPGA_write(BDN_FPGA, 0x20, ref_full_scale);
 
 	int_disable();
+
 	C6657_timer0_init(TIMER0_INTERVAL);
 	C6657_timer0_init_vector(update_lpf, (CSL_IntcVectId)6);
 	C6657_timer0_start();
 	C6657_timer0_enable_int();
+
 	C6657_timer1_init(TIMER1_INTERVAL);
 	C6657_timer1_init_vector(update_pdm, (CSL_IntcVectId)7);
 	C6657_timer1_start();
 	C6657_timer1_enable_int();
+
+	C6657_timer2_init(TIMER2_INTERVAL);
+	C6657_timer2_init_vector(read_dc_current, (CSL_IntcVectId)8);
+	C6657_timer2_start();
+	C6657_timer2_enable_int();
+
 	int_enable();
 }
 
