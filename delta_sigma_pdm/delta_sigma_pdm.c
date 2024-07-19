@@ -56,8 +56,8 @@ float pdm_duty_ref = 0;
 volatile float proportionalGain;
 volatile float integralGain;
 volatile int Pref_update = 0;
-// int counter = 0;
-// volatile int update_Pref_count = 1000;
+int counter = 0;
+volatile int update_Pref_count = 1000;
 volatile int update_start = 0;
 
 const float Gth = 0.1042;
@@ -132,17 +132,17 @@ interrupt void update_pdm(void)
 	Plpf = IPFPGA_read(BDN_FPGA, 0x17) * ATTENUATION * ATTENUATION / 64. / 64.;
 
 	if (control_on == 1) {
-		// if (Pref_update != 0)
-		// {
-		// 	counter += 1;
-		// 	if (counter >= update_Pref_count)
-		// 	{
-		// 		Pref = Pref_update;
-		// 	}
-		// }
-		if (update_start == 1) {
-			Pref = Pref_update;
+		if (Pref_update != 0)
+		{
+			counter += 1;
+			if (counter >= update_Pref_count)
+			{
+				Pref = Pref_update;
+			}
 		}
+		// if (update_start == 1) {
+		// 	Pref = Pref_update;
+		// }
 		error_crnt = Pref - Plpf;
 		error_integral = error_integral + (error_crnt + error_prvs) / 2 * period;
         v1_ampl_ref = proportionalGain * error_crnt + integralGain * error_integral;
